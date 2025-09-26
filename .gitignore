@@ -1,0 +1,10 @@
+bin/
+.claude/
+token.json
+credentials.json
+.mcp.json
+CLAUDE.md
+claude.md
+gemini.md
+GEMINI.md
+
