@@ -155,6 +155,10 @@ func (ct *CalendarTools) GetTools() []mcp.Tool {
 						},
 						"description": "Event reminder settings",
 					},
+					"colorId": map[string]interface{}{
+						"type":        "string",
+						"description": "Event color ID (string). Use standard IDs like '1', '2', '3', etc. for different colors",
+					},
 				},
 				Required: []string{"summary", "start_time", "end_time"},
 			},
@@ -235,6 +239,10 @@ func (ct *CalendarTools) GetTools() []mcp.Tool {
 						"description": "Whether to send email notifications to attendees",
 						"default":     true,
 					},
+					"colorId": map[string]interface{}{
+						"type":        "string",
+						"description": "Event color ID (string). Use standard IDs like '1', '2', '3', etc. for different colors",
+					},
 				},
 				Required: []string{"event_id"},
 			},
@@ -261,6 +269,15 @@ func (ct *CalendarTools) GetTools() []mcp.Tool {
 					},
 				},
 				Required: []string{"event_id"},
+			},
+		},
+		{
+			Name:        "get_calendar_colors",
+			Description: "Get available calendar and event colors with their IDs and names/labels.",
+			InputSchema: mcp.ToolSchema{
+				Type:       "object",
+				Properties: map[string]interface{}{},
+				Required:   []string{},
 			},
 		},
 		{
@@ -377,6 +394,8 @@ func (ct *CalendarTools) HandleTool(name string, arguments map[string]interface{
 		return ct.handleEditEvent(arguments)
 	case "delete_event":
 		return ct.handleDeleteEvent(arguments)
+	case "get_calendar_colors":
+		return ct.handleGetCalendarColors(arguments)
 	case "search_attendees":
 		return ct.handleSearchAttendees(arguments)
 	case "get_attendee_freebusy":
@@ -498,6 +517,22 @@ func (ct *CalendarTools) handleDeleteEvent(arguments map[string]interface{}) (*m
 	}, nil
 }
 
+func (ct *CalendarTools) handleGetCalendarColors(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
+	colors, err := ct.client.GetCalendarColors()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get calendar colors: %v", err)
+	}
+
+	result := ct.formatColorsResult(colors)
+
+	return &mcp.CallToolResult{
+		Content: []mcp.ToolResult{{
+			Type: "text",
+			Text: result,
+		}},
+	}, nil
+}
+
 func (ct *CalendarTools) handleSearchAttendees(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
 	query, ok := arguments["query"].(string)
 	if !ok || query == "" {
@@ -609,6 +644,7 @@ func (ct *CalendarTools) parseEventParams(arguments map[string]interface{}) (Eve
 		GuestCanModify:         getBoolOrDefault(arguments, "guest_can_modify", false),
 		GuestCanInviteOthers:   getBoolOrDefault(arguments, "guest_can_invite_others", true),
 		GuestCanSeeOtherGuests: getBoolOrDefault(arguments, "guest_can_see_other_guests", true),
+		ColorID:                getStringOrDefault(arguments, "colorId", ""),
 	}
 
 	// Parse start and end times
@@ -707,6 +743,9 @@ func (ct *CalendarTools) parsePatchEventParams(arguments map[string]interface{})
 	}
 	if allDay, ok := arguments["all_day"].(bool); ok {
 		params.AllDay = &allDay
+	}
+	if colorID, ok := arguments["colorId"].(string); ok {
+		params.ColorID = &colorID
 	}
 
 	// Guest permissions - set only if explicitly provided
@@ -817,6 +856,16 @@ func (ct *CalendarTools) formatFreeBusyResult(response interface{}, attendees []
 
 	responseJSON, _ := json.MarshalIndent(response, "", "  ")
 	result.WriteString(string(responseJSON))
+
+	return result.String()
+}
+
+func (ct *CalendarTools) formatColorsResult(colors interface{}) string {
+	var result strings.Builder
+	result.WriteString("🎨 Available Calendar Colors:\n\n")
+
+	colorsJSON, _ := json.MarshalIndent(colors, "", "  ")
+	result.WriteString(string(colorsJSON))
 
 	return result.String()
 }
@@ -1070,6 +1119,9 @@ func (ct *CalendarTools) formatSingleEvent(result *strings.Builder, event *calen
 			}
 		}
 	}
+
+	// Color information - always show to debug what's being returned
+	result.WriteString(fmt.Sprintf("🎨 **Color ID:** '%s' (length: %d)\n", event.ColorId, len(event.ColorId)))
 
 	// Event ID for reference
 	result.WriteString(fmt.Sprintf("🆔 **Event ID:** %s\n", event.Id))

@@ -414,6 +414,19 @@ Key Overlaps Detected:
 5. **1-hour breaks between blocks** (reduce to 30 minutes only as last resort)
 6. **Maximize break time** when possible while respecting above constraints
 
+## Calendar Color Coding System
+
+**Standard Color Assignments:**
+- **Color ID 5 (Yellow)**: Focus Time - Dedicated blocks for focused work and deep thinking
+- **Color ID 4 (Red)**: Sync Up - 1:1 meetings, weekly syncs, and regular check-ins
+- **Color ID 2 (Blue)**: Team - Team meetings, standups, group discussions, and collaborative sessions
+
+**Color Usage Guidelines:**
+- Apply appropriate color IDs when creating new events based on event type
+- Use consistent color coding to help users visually organize their calendar
+- When users request color changes, reference this standard system for suggestions
+- **IMPORTANT**: These color assignments override any color descriptions returned by the Google Calendar API - always use the standardized color names above regardless of API responses
+
 ## Behavioral Rules
 
 1. **Always validate required parameters** before creating events
@@ -450,6 +463,10 @@ Key Overlaps Detected:
     - Highlight overlaps and conflicts visually
     - Obfuscate PII data in event names using placeholders
     - Include legend and overlap summary for clarity
+22. **Apply standard color coding** when creating events:
+    - Use Color ID 5 (Yellow) for Focus Time events
+    - Use Color ID 4 (Red) for Sync Up/1:1 meetings
+    - Use Color ID 2 (Blue) for Team meetings and group sessions
 
 ## Error Recovery
 
