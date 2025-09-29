@@ -53,6 +53,7 @@ type EventParams struct {
 	GuestCanSeeOtherGuests bool                  `json:"guest_can_see_other_guests,omitempty"`
 	ConferenceData         *ConferenceDataParams `json:"conference_data,omitempty"`
 	Reminders              *RemindersParams      `json:"reminders,omitempty"`
+	ColorID                string                `json:"color_id,omitempty"`
 }
 
 // PatchEventParams represents parameters for patching an event with explicit field tracking
@@ -74,10 +75,11 @@ type PatchEventParams struct {
 	GuestCanSeeOtherGuests *bool                 `json:"guest_can_see_other_guests,omitempty"`
 	ConferenceData         *ConferenceDataParams `json:"conference_data,omitempty"`
 	Reminders              *RemindersParams      `json:"reminders,omitempty"`
+	ColorID                *string               `json:"color_id,omitempty"`
 
 	// Track which fields have been explicitly provided
 	HasAttendees  bool `json:"-"`
-	HasRecurrence bool `json:"-"`
+	HasRecurrence bool `json:"-"}`
 }
 
 type AttendeeParams struct {
@@ -188,6 +190,11 @@ func (c *Client) CreateEvent(params EventParams) (*calendar.Event, error) {
 		event.Visibility = params.Visibility
 	}
 
+	// Set color
+	if params.ColorID != "" {
+		event.ColorId = params.ColorID
+	}
+
 	// Set guest permissions
 	event.GuestsCanModify = params.GuestCanModify
 	event.GuestsCanInviteOthers = &params.GuestCanInviteOthers
@@ -264,6 +271,9 @@ func (c *Client) PatchEvent(eventID string, params EventParams) (*calendar.Event
 	}
 	if params.Visibility != "" {
 		patchParams.Visibility = &params.Visibility
+	}
+	if params.ColorID != "" {
+		patchParams.ColorID = &params.ColorID
 	}
 	if len(params.Attendees) > 0 {
 		// Convert []string to []AttendeeParams for backward compatibility
@@ -381,6 +391,10 @@ func (c *Client) PatchEventDirect(eventID string, params PatchEventParams) (*cal
 		patchEvent.Visibility = *params.Visibility
 	}
 
+	if params.ColorID != nil {
+		patchEvent.ColorId = *params.ColorID
+	}
+
 	// Set guest permissions only if explicitly provided
 	if params.GuestCanModify != nil {
 		patchEvent.GuestsCanModify = *params.GuestCanModify
@@ -451,9 +465,9 @@ func (c *Client) GetEvent(calendarID, eventID string) (*calendar.Event, error) {
 		calendarID = "primary"
 	}
 
-	// Get event with complete attendee information including response status
+	// Get event with complete attendee information including response status and color
 	getCall := c.service.Events.Get(calendarID, eventID).
-		Fields(googleapi.Field("id,summary,description,location,start,end,attendees(email,displayName,responseStatus),conferenceData,creator,organizer"))
+		Fields(googleapi.Field("id,summary,description,location,start,end,attendees(email,displayName,responseStatus),conferenceData,creator,organizer,colorId"))
 	return getCall.Do()
 }
 
@@ -524,8 +538,8 @@ func (c *Client) ListEvents(params ListEventsParams) (*calendar.Events, error) {
 	// Ensure attendee information including response status is included
 	call = call.AlwaysIncludeEmail(true)
 
-	// Specify fields to ensure complete attendee information is returned
-	call = call.Fields(googleapi.Field("items(id,summary,description,location,start,end,attendees(email,displayName,responseStatus),conferenceData,creator,organizer),nextPageToken,summary"))
+	// Remove field selection to get all fields including colorId by default
+	// call = call.Fields(googleapi.Field("items(id,summary,description,location,start,end,attendees(email,displayName,responseStatus),conferenceData,creator,organizer,colorId),nextPageToken,summary"))
 
 	// Set other parameters
 	if params.MaxResults > 0 {
@@ -621,4 +635,9 @@ func (c *Client) getUserEmail() (string, error) {
 	}
 
 	return cal.Id, nil
+}
+
+// GetCalendarColors gets the color definitions for calendars and events
+func (c *Client) GetCalendarColors() (*calendar.Colors, error) {
+	return c.service.Colors.Get().Do()
 }
