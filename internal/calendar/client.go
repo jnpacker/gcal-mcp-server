@@ -36,24 +36,40 @@ func NewClient(service *calendar.Service) *Client {
 }
 
 type EventParams struct {
-	CalendarID             string                `json:"calendar_id"`
-	Summary                string                `json:"summary"`
-	Description            string                `json:"description,omitempty"`
-	Location               string                `json:"location,omitempty"`
-	StartTime              time.Time             `json:"start_time"`
-	EndTime                time.Time             `json:"end_time"`
-	TimeZone               string                `json:"timezone,omitempty"`
-	AllDay                 bool                  `json:"all_day,omitempty"`
-	Attendees              []string              `json:"attendees,omitempty"`
-	Recurrence             []string              `json:"recurrence,omitempty"`
-	Visibility             string                `json:"visibility,omitempty"`
-	SendNotifications      bool                  `json:"send_notifications,omitempty"`
-	GuestCanModify         bool                  `json:"guest_can_modify,omitempty"`
-	GuestCanInviteOthers   bool                  `json:"guest_can_invite_others,omitempty"`
-	GuestCanSeeOtherGuests bool                  `json:"guest_can_see_other_guests,omitempty"`
-	ConferenceData         *ConferenceDataParams `json:"conference_data,omitempty"`
-	Reminders              *RemindersParams      `json:"reminders,omitempty"`
-	ColorID                string                `json:"color_id,omitempty"`
+	CalendarID             string                   `json:"calendar_id"`
+	Summary                string                   `json:"summary"`
+	Description            string                   `json:"description,omitempty"`
+	Location               string                   `json:"location,omitempty"`
+	StartTime              time.Time                `json:"start_time"`
+	EndTime                time.Time                `json:"end_time"`
+	TimeZone               string                   `json:"timezone,omitempty"`
+	AllDay                 bool                     `json:"all_day,omitempty"`
+	Attendees              []string                 `json:"attendees,omitempty"`
+	Recurrence             []string                 `json:"recurrence,omitempty"`
+	Visibility             string                   `json:"visibility,omitempty"`
+	SendNotifications      bool                     `json:"send_notifications,omitempty"`
+	GuestCanModify         bool                     `json:"guest_can_modify,omitempty"`
+	GuestCanInviteOthers   bool                     `json:"guest_can_invite_others,omitempty"`
+	GuestCanSeeOtherGuests bool                     `json:"guest_can_see_other_guests,omitempty"`
+	ConferenceData         *ConferenceDataParams    `json:"conference_data,omitempty"`
+	Reminders              *RemindersParams         `json:"reminders,omitempty"`
+	ColorID                string                   `json:"color_id,omitempty"`
+	EventType              string                   `json:"event_type,omitempty"`
+	WorkingLocation        *WorkingLocationParams   `json:"working_location,omitempty"`
+	FocusTimeProperties    *FocusTimeProperties     `json:"focus_time_properties,omitempty"`
+}
+
+// WorkingLocationParams represents working location information for events
+type WorkingLocationParams struct {
+	Type  string `json:"type"`  // "home", "office", or "custom"
+	Label string `json:"label"` // Custom label for the location
+}
+
+// FocusTimeProperties represents focus time configuration for events
+type FocusTimeProperties struct {
+	AutoDeclineMode string `json:"autoDeclineMode"` // "declineNone", "declineAll", "declineOnlyNew"
+	ChatStatus      string `json:"chatStatus"`      // "available", "doNotDisturb"
+	DeclineMessage  string `json:"declineMessage"`  // Custom decline message
 }
 
 // PatchEventParams represents parameters for patching an event with explicit field tracking
@@ -74,8 +90,10 @@ type PatchEventParams struct {
 	GuestCanInviteOthers   *bool                 `json:"guest_can_invite_others,omitempty"`
 	GuestCanSeeOtherGuests *bool                 `json:"guest_can_see_other_guests,omitempty"`
 	ConferenceData         *ConferenceDataParams `json:"conference_data,omitempty"`
-	Reminders              *RemindersParams      `json:"reminders,omitempty"`
-	ColorID                *string               `json:"color_id,omitempty"`
+	Reminders              *RemindersParams         `json:"reminders,omitempty"`
+	ColorID                *string                  `json:"color_id,omitempty"`
+	EventType              *string                  `json:"event_type,omitempty"`
+	WorkingLocation        *WorkingLocationParams   `json:"working_location,omitempty"`
 
 	// Track which fields have been explicitly provided
 	HasAttendees  bool `json:"-"`
@@ -229,6 +247,42 @@ func (c *Client) CreateEvent(params EventParams) (*calendar.Event, error) {
 				}
 			}
 			event.Reminders.Overrides = overrides
+		}
+	}
+
+	// Set event type
+	if params.EventType != "" {
+		event.EventType = params.EventType
+	}
+
+	// Set extended properties to store eventType, workingLocation, and focusTimeProperties
+	if params.EventType != "" || params.WorkingLocation != nil || params.FocusTimeProperties != nil {
+		event.ExtendedProperties = &calendar.EventExtendedProperties{
+			Private: make(map[string]string),
+		}
+
+		if params.EventType != "" {
+			event.ExtendedProperties.Private["eventType"] = params.EventType
+		}
+
+		if params.WorkingLocation != nil {
+			event.ExtendedProperties.Private["workingLocationType"] = params.WorkingLocation.Type
+			event.ExtendedProperties.Private["workingLocationLabel"] = params.WorkingLocation.Label
+		}
+
+		if params.FocusTimeProperties != nil {
+			event.ExtendedProperties.Private["focusTimeAutoDeclineMode"] = params.FocusTimeProperties.AutoDeclineMode
+			event.ExtendedProperties.Private["focusTimeChatStatus"] = params.FocusTimeProperties.ChatStatus
+			event.ExtendedProperties.Private["focusTimeDeclineMessage"] = params.FocusTimeProperties.DeclineMessage
+		}
+	}
+
+	// Set focus time properties for Google Calendar API
+	if params.EventType == "focusTime" && params.FocusTimeProperties != nil {
+		event.FocusTimeProperties = &calendar.EventFocusTimeProperties{
+			AutoDeclineMode: params.FocusTimeProperties.AutoDeclineMode,
+			ChatStatus:      params.FocusTimeProperties.ChatStatus,
+			DeclineMessage:  params.FocusTimeProperties.DeclineMessage,
 		}
 	}
 
@@ -435,6 +489,22 @@ func (c *Client) PatchEventDirect(eventID string, params PatchEventParams) (*cal
 				}
 			}
 			patchEvent.Reminders.Overrides = overrides
+		}
+	}
+
+	// Handle extended properties for eventType and workingLocation
+	if params.EventType != nil || params.WorkingLocation != nil {
+		patchEvent.ExtendedProperties = &calendar.EventExtendedProperties{
+			Private: make(map[string]string),
+		}
+
+		if params.EventType != nil {
+			patchEvent.ExtendedProperties.Private["eventType"] = *params.EventType
+		}
+
+		if params.WorkingLocation != nil {
+			patchEvent.ExtendedProperties.Private["workingLocationType"] = params.WorkingLocation.Type
+			patchEvent.ExtendedProperties.Private["workingLocationLabel"] = params.WorkingLocation.Label
 		}
 	}
 

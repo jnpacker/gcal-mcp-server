@@ -58,8 +58,50 @@ When creating events, follow this comprehensive process:
 - `guest_can_invite_others`: true
 - `guest_can_see_other_guests`: true
 - `create_meet_link`: false (offer to create Google Meet link for virtual meetings)
+- `eventType`: "default" (normal event, can also be "focusTime" or "workingLocation")
+- `workingLocation`: null (only set when eventType is "workingLocation")
 
-#### Step 3: Enhanced Meeting Features
+#### Step 3: Event Type Classification and Special Features
+
+**Event Type Options:**
+- `"default"`: Standard calendar events (meetings, appointments, etc.)
+- `"focusTime"`: Dedicated time blocks for focused work
+- `"workingLocation"`: Location-based events indicating where you'll be working
+
+**Event Type Usage Guidelines:**
+
+**Default Events (`eventType: "default"`):**
+- Regular meetings, appointments, calls
+- Social events, personal appointments
+- Any standard calendar event
+- Use for events with attendees or standard meetings
+
+**Focus Time Events (`eventType: "focusTime"`):**
+- Dedicated work blocks for deep focus
+- Time reserved for specific projects or tasks
+- Coding sessions, writing time, research blocks
+- Typically should not have attendees (personal productivity time)
+- Suggest declining meeting requests during focus time blocks
+- **ALWAYS set `colorId: "5"`** for consistent Focus Time visual identification
+- **Focus Time Properties support:**
+  - `autoDeclineMode`: Controls automatic meeting decline behavior
+    - `"declineNone"`: Don't auto-decline any meetings
+    - `"declineAll"`: Auto-decline all meeting invitations
+    - `"declineOnlyNew"`: Auto-decline only new meeting invitations (default)
+  - `chatStatus`: Sets chat/presence status during focus time
+    - `"available"`: Keep normal chat availability
+    - `"doNotDisturb"`: Set status to do not disturb (default)
+  - `declineMessage`: Custom message for declined meetings (optional)
+    - Default: "I'm currently in focus time and unable to attend meetings. Please reach out if this is urgent."
+
+**Working Location Events (`eventType: "workingLocation"`):**
+- All-day or multi-hour location indicators
+- "Working from home", "In office", "At client site"
+- Travel days, remote work indicators
+- Set `workingLocation: {"type": "home|office|custom", "label": "Custom Location"}` when eventType is "workingLocation"
+- Typically all-day events to indicate work location for the day
+
+#### Step 4: Enhanced Meeting Features
 **Conference Integration:**
 - For virtual meetings, offer to create Google Meet links automatically
 - Set `create_meet_link: true` to generate Meet links
@@ -238,6 +280,32 @@ Use meeting numbers for actions: "reschedule meeting 2" or "delete meeting 4"
 Event ID: abc123def456 (save this for future edits)
 ```
 
+**Focus Time Event Example:**
+```
+✅ Focus Time created successfully:
+
+🧠 Focus Time: Deep work - Database optimization
+🕐 Time: January 15, 2024 at 2:00 PM - 4:00 PM (PST)
+🔒 Private event (no attendees)
+🛡️ Auto-decline Mode: declineOnlyNew
+🔕 Chat Status: doNotDisturb
+📝 Decline Message: I'm currently in focus time and unable to attend meetings. Please reach out if this is urgent.
+
+Event ID: def789ghi012 (save this for future edits)
+```
+
+**Working Location Event Example:**
+```
+✅ Working Location set successfully:
+
+🏠 Working from Home
+🕐 Time: January 15, 2024 (All Day)
+📍 Location Type: Home
+👀 Visible to team for coordination
+
+Event ID: ghi345jkl678 (save this for future edits)
+```
+
 ### Event Patch Response:
 ```
 ✅ Event patched successfully:
@@ -319,19 +387,42 @@ Key Overlaps Detected:
 
 ### 1. Meeting Types and Templates
 
-#### Business Meetings:
+#### Business Meetings (`eventType: "default"`):
 - Include agenda in description
 - Set 15-minute buffer time between meetings
 - Create Google Meet links for hybrid attendance
 - Set popup reminders 15 minutes before
+- Include relevant attendees and location
 
-#### All-Hands/Large Meetings:
+#### Focus Time Blocks (`eventType: "focusTime"`):
+- No attendees (personal productivity time)
+- Use descriptive summaries like "Deep work - Project Alpha implementation"
+- Set `visibility: "private"` to avoid interruptions
+- **ALWAYS set `colorId: "5"`** for consistent Focus Time visual identification
+- Suggest 2-4 hour blocks for maximum effectiveness
+- **Configure focus time properties** using `focusTimeProperties` parameter:
+  - **Auto-decline mode**: Automatically decline conflicting meetings
+  - **Chat status**: Set to "doNotDisturb" for uninterrupted focus
+  - **Custom decline message**: Personalized message for declined invitations
+- Example: "Focus Time: Code review and bug fixes"
+- **Recommended settings**: `autoDeclineMode: "declineOnlyNew"`, `chatStatus: "doNotDisturb"`, `colorId: "5"`
+
+#### Working Location Indicators (`eventType: "workingLocation"`):
+- Set `workingLocation` parameter with appropriate type and label
+- Typically all-day events
+- Examples:
+  - `workingLocation: {"type": "home", "label": "Working from Home"}`
+  - `workingLocation: {"type": "office", "label": "Red Hat Office - Raleigh"}`
+  - `workingLocation: {"type": "custom", "label": "Client Site - IBM Austin"}`
+- Use for team coordination and availability tracking
+
+#### All-Hands/Large Meetings (`eventType: "default"`):
 - Set `guest_can_invite_others: false` for control
 - Use `visibility: "public"` for company-wide events
 - Disable guest modifications
 - Send notifications well in advance
 
-#### Personal Events:
+#### Personal Events (`eventType: "default"`):
 - Use `visibility: "private"` for personal events
 - Minimal attendee permissions
 - Custom reminder preferences
@@ -449,9 +540,11 @@ Key Overlaps Detected:
 18. **Detect and mark overlapping meetings** in event tables:
     - Add ⚠️ emoji prefix to the Time column for any meetings that overlap with other meetings
     - Calculate overlaps by checking if any two events have overlapping time periods
-    - **IMPORTANT: Only consider meetings that the user has NOT declined when detecting overlaps**
+    - **CRITICAL: Only consider meetings that the user has NOT declined when detecting overlaps**
     - Declined meetings (user status = ❌) should NOT be counted as overlapping since the user won't be attending
     - Show clear visual indication of scheduling conflicts to help users identify double-bookings
+    - **Large meeting overlap suggestion**: When a meeting with 15+ attendees is part of an overlap, suggest declining it with the reasoning that large meetings are often optional and can be watched as recordings later
+    - **Dynamic overlap recalculation**: After a meeting is declined, immediately recalculate overlaps excluding the newly declined meeting to provide accurate conflict detection
 19. **Strike through declined events** with dark grey text using `<span style="color: #666;">~~Event Name~~</span>` format
 20. **Handle meetings where all other attendees have declined**:
     - When all attendees except the user have declined a meeting, suggest either declining or deleting the meeting

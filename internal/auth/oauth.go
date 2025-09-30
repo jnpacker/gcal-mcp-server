@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -36,10 +37,72 @@ const (
 	tokenFile       = "token.json"
 )
 
+// findRepositoryRoot walks up the directory tree to find the repository root
+// by looking for go.mod file or .git directory
+func findRepositoryRoot() (string, error) {
+	// Start from the current executable's directory
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		return "", fmt.Errorf("unable to determine current file path")
+	}
+
+	dir := filepath.Dir(filename)
+
+	// Walk up the directory tree
+	for {
+		// Check for go.mod file (Go module root)
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir, nil
+		}
+
+		// Check for .git directory (Git repository root)
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return dir, nil
+		}
+
+		// Move up one directory
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			// Reached filesystem root without finding repository markers
+			break
+		}
+		dir = parent
+	}
+
+	return "", fmt.Errorf("repository root not found (no go.mod or .git found)")
+}
+
+// getCredentialPaths returns the full paths for credentials and token files
+// First tries repository root, then falls back to current working directory
+func getCredentialPaths() (string, string, error) {
+	var credPath, tokenPath string
+
+	// Try to find repository root
+	if repoRoot, err := findRepositoryRoot(); err == nil {
+		credPath = filepath.Join(repoRoot, credentialsFile)
+		tokenPath = filepath.Join(repoRoot, tokenFile)
+	} else {
+		// Fallback to current working directory
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", "", fmt.Errorf("unable to get current working directory: %v", err)
+		}
+		credPath = filepath.Join(cwd, credentialsFile)
+		tokenPath = filepath.Join(cwd, tokenFile)
+	}
+
+	return credPath, tokenPath, nil
+}
+
 func GetCalendarService() (*calendar.Service, error) {
-	b, err := os.ReadFile(credentialsFile)
+	credPath, tokenPath, err := getCredentialPaths()
 	if err != nil {
-		return nil, fmt.Errorf("unable to read client secret file: %v", err)
+		return nil, fmt.Errorf("unable to determine credential paths: %v", err)
+	}
+
+	b, err := os.ReadFile(credPath)
+	if err != nil {
+		return nil, fmt.Errorf("unable to read client secret file from %s: %v", credPath, err)
 	}
 
 	config, err := google.ConfigFromJSON(b, calendar.CalendarScope)
@@ -47,7 +110,7 @@ func GetCalendarService() (*calendar.Service, error) {
 		return nil, fmt.Errorf("unable to parse client secret file to config: %v", err)
 	}
 
-	client := getClient(config)
+	client := getClient(config, tokenPath)
 
 	srv, err := calendar.New(client)
 	if err != nil {
@@ -57,12 +120,11 @@ func GetCalendarService() (*calendar.Service, error) {
 	return srv, nil
 }
 
-func getClient(config *oauth2.Config) *http.Client {
-	tokFile := tokenFile
-	tok, err := tokenFromFile(tokFile)
+func getClient(config *oauth2.Config, tokenPath string) *http.Client {
+	tok, err := tokenFromFile(tokenPath)
 	if err != nil {
 		tok = getTokenFromWeb(config)
-		saveToken(tokFile, tok)
+		saveToken(tokenPath, tok)
 	}
 	return config.Client(context.Background(), tok)
 }
@@ -169,20 +231,19 @@ func saveToken(path string, token *oauth2.Token) {
 }
 
 func SetupCredentials() error {
-	homeDir, err := os.UserHomeDir()
+	credPath, tokenPath, err := getCredentialPaths()
 	if err != nil {
-		return fmt.Errorf("unable to get user home directory: %v", err)
+		return fmt.Errorf("unable to determine credential paths: %v", err)
 	}
 
-	credPath := filepath.Join(homeDir, ".config", "gcal-mcp-server", credentialsFile)
-	tokenPath := filepath.Join(homeDir, ".config", "gcal-mcp-server", tokenFile)
-
 	if _, err := os.Stat(credPath); os.IsNotExist(err) {
-		return fmt.Errorf("credentials.json not found at %s. Please download it from Google Cloud Console", credPath)
+		return fmt.Errorf("credentials.json not found at %s. Please download it from Google Cloud Console and place it in the repository root", credPath)
 	}
 
 	if _, err := os.Stat(tokenPath); os.IsNotExist(err) {
-		fmt.Printf("Token file not found. Will need to authenticate via browser.\n")
+		fmt.Printf("Token file not found at %s. Will need to authenticate via browser.\n", tokenPath)
+	} else {
+		fmt.Printf("Found existing token at %s\n", tokenPath)
 	}
 
 	return nil
