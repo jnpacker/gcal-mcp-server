@@ -159,6 +159,49 @@ func (ct *CalendarTools) GetTools() []mcp.Tool {
 						"type":        "string",
 						"description": "Event color ID (string). Use standard IDs like '1', '2', '3', etc. for different colors",
 					},
+					"eventType": map[string]interface{}{
+						"type":        "string",
+						"description": "Event type: 'default' (normal event), 'focusTime' (dedicated work blocks), 'workingLocation' (location indicators)",
+						"enum":        []string{"default", "focusTime", "workingLocation"},
+						"default":     "default",
+					},
+					"workingLocation": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"type": map[string]interface{}{
+								"type":        "string",
+								"description": "Working location type: 'home', 'office', or 'custom'",
+								"enum":        []string{"home", "office", "custom"},
+							},
+							"label": map[string]interface{}{
+								"type":        "string",
+								"description": "Custom label for the working location",
+							},
+						},
+						"description": "Working location settings (only used when eventType is 'workingLocation')",
+					},
+					"focusTimeProperties": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"autoDeclineMode": map[string]interface{}{
+								"type":        "string",
+								"description": "Auto-decline mode for focus time: 'declineNone', 'declineAllConflictingInvitations', 'declineOnlyNewConflictingInvitations' (default)",
+								"enum":        []string{"declineNone", "declineAllConflictingInvitations", "declineOnlyNewConflictingInvitations"},
+								"default":     "declineOnlyNewConflictingInvitations",
+							},
+							"chatStatus": map[string]interface{}{
+								"type":        "string",
+								"description": "Chat status during focus time: 'available' or 'doNotDisturb' (default)",
+								"enum":        []string{"available", "doNotDisturb"},
+								"default":     "doNotDisturb",
+							},
+							"declineMessage": map[string]interface{}{
+								"type":        "string",
+								"description": "Custom message for declined meetings (optional, default message will be used if not provided)",
+							},
+						},
+						"description": "Focus time properties (only used when eventType is 'focusTime')",
+					},
 				},
 				Required: []string{"summary", "start_time", "end_time"},
 			},
@@ -242,6 +285,26 @@ func (ct *CalendarTools) GetTools() []mcp.Tool {
 					"colorId": map[string]interface{}{
 						"type":        "string",
 						"description": "Event color ID (string). Use standard IDs like '1', '2', '3', etc. for different colors",
+					},
+					"eventType": map[string]interface{}{
+						"type":        "string",
+						"description": "Event type: 'default' (normal event), 'focusTime' (dedicated work blocks), 'workingLocation' (location indicators)",
+						"enum":        []string{"default", "focusTime", "workingLocation"},
+					},
+					"workingLocation": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"type": map[string]interface{}{
+								"type":        "string",
+								"description": "Working location type: 'home', 'office', or 'custom'",
+								"enum":        []string{"home", "office", "custom"},
+							},
+							"label": map[string]interface{}{
+								"type":        "string",
+								"description": "Custom label for the working location",
+							},
+						},
+						"description": "Working location settings (only used when eventType is 'workingLocation')",
 					},
 				},
 				Required: []string{"event_id"},
@@ -645,6 +708,38 @@ func (ct *CalendarTools) parseEventParams(arguments map[string]interface{}) (Eve
 		GuestCanInviteOthers:   getBoolOrDefault(arguments, "guest_can_invite_others", true),
 		GuestCanSeeOtherGuests: getBoolOrDefault(arguments, "guest_can_see_other_guests", true),
 		ColorID:                getStringOrDefault(arguments, "colorId", ""),
+		EventType:              getStringOrDefault(arguments, "eventType", "default"),
+	}
+
+	// Parse workingLocation if provided
+	if workingLocationInterface, ok := arguments["workingLocation"]; ok {
+		if workingLocationMap, ok := workingLocationInterface.(map[string]interface{}); ok {
+			params.WorkingLocation = &WorkingLocationParams{
+				Type:  getStringOrDefault(workingLocationMap, "type", ""),
+				Label: getStringOrDefault(workingLocationMap, "label", ""),
+			}
+		}
+	}
+
+	// Parse focusTimeProperties if provided
+	if focusTimeInterface, ok := arguments["focusTimeProperties"]; ok {
+		if focusTimeMap, ok := focusTimeInterface.(map[string]interface{}); ok {
+			// Set defaults
+			autoDeclineMode := getStringOrDefault(focusTimeMap, "autoDeclineMode", "declineOnlyNewConflictingInvitations")
+			chatStatus := getStringOrDefault(focusTimeMap, "chatStatus", "doNotDisturb")
+			declineMessage := getStringOrDefault(focusTimeMap, "declineMessage", "")
+
+			// Create default decline message if not provided
+			if declineMessage == "" {
+				declineMessage = "I'm currently in focus time and unable to attend meetings. Please reach out if this is urgent."
+			}
+
+			params.FocusTimeProperties = &FocusTimeProperties{
+				AutoDeclineMode: autoDeclineMode,
+				ChatStatus:      chatStatus,
+				DeclineMessage:  declineMessage,
+			}
+		}
 	}
 
 	// Parse start and end times
@@ -746,6 +841,20 @@ func (ct *CalendarTools) parsePatchEventParams(arguments map[string]interface{})
 	}
 	if colorID, ok := arguments["colorId"].(string); ok {
 		params.ColorID = &colorID
+	}
+	if eventType, ok := arguments["eventType"].(string); ok {
+		params.EventType = &eventType
+	}
+
+	// Parse workingLocation if provided
+	if workingLocationInterface, ok := arguments["workingLocation"]; ok {
+		if workingLocationMap, ok := workingLocationInterface.(map[string]interface{}); ok {
+			workingLocation := &WorkingLocationParams{
+				Type:  getStringOrDefault(workingLocationMap, "type", ""),
+				Label: getStringOrDefault(workingLocationMap, "label", ""),
+			}
+			params.WorkingLocation = workingLocation
+		}
 	}
 
 	// Guest permissions - set only if explicitly provided
@@ -1117,6 +1226,63 @@ func (ct *CalendarTools) formatSingleEvent(result *strings.Builder, event *calen
 				result.WriteString(fmt.Sprintf("🔗 **Meeting Link:** %s\n", entry.Uri))
 				break
 			}
+		}
+	}
+
+	// Event type information from extended properties
+	if event.ExtendedProperties != nil && event.ExtendedProperties.Private != nil {
+		if eventType, exists := event.ExtendedProperties.Private["eventType"]; exists && eventType != "" {
+			var typeIcon string
+			switch eventType {
+			case "focusTime":
+				typeIcon = "🧠"
+			case "workingLocation":
+				typeIcon = "📍"
+			default:
+				typeIcon = "📋"
+			}
+			result.WriteString(fmt.Sprintf("%s **Event Type:** %s\n", typeIcon, eventType))
+		}
+
+		// Working location information from extended properties
+		if workingType, typeExists := event.ExtendedProperties.Private["workingLocationType"]; typeExists && workingType != "" {
+			if workingLabel, labelExists := event.ExtendedProperties.Private["workingLocationLabel"]; labelExists && workingLabel != "" {
+				result.WriteString(fmt.Sprintf("🏢 **Working Location:** %s (%s)\n", workingLabel, workingType))
+			} else {
+				result.WriteString(fmt.Sprintf("🏢 **Working Location Type:** %s\n", workingType))
+			}
+		}
+
+		// Focus time properties information from extended properties
+		if autoDeclineMode, exists := event.ExtendedProperties.Private["focusTimeAutoDeclineMode"]; exists && autoDeclineMode != "" {
+			result.WriteString(fmt.Sprintf("🛡️ **Auto-decline Mode:** %s\n", autoDeclineMode))
+		}
+		if chatStatus, exists := event.ExtendedProperties.Private["focusTimeChatStatus"]; exists && chatStatus != "" {
+			statusIcon := "💬"
+			if chatStatus == "doNotDisturb" {
+				statusIcon = "🔕"
+			}
+			result.WriteString(fmt.Sprintf("%s **Chat Status:** %s\n", statusIcon, chatStatus))
+		}
+		if declineMessage, exists := event.ExtendedProperties.Private["focusTimeDeclineMessage"]; exists && declineMessage != "" {
+			result.WriteString(fmt.Sprintf("📝 **Decline Message:** %s\n", declineMessage))
+		}
+	}
+
+	// Also check focus time properties from Google Calendar API fields
+	if event.FocusTimeProperties != nil {
+		if event.FocusTimeProperties.AutoDeclineMode != "" {
+			result.WriteString(fmt.Sprintf("🛡️ **Auto-decline Mode:** %s\n", event.FocusTimeProperties.AutoDeclineMode))
+		}
+		if event.FocusTimeProperties.ChatStatus != "" {
+			statusIcon := "💬"
+			if event.FocusTimeProperties.ChatStatus == "doNotDisturb" {
+				statusIcon = "🔕"
+			}
+			result.WriteString(fmt.Sprintf("%s **Chat Status:** %s\n", statusIcon, event.FocusTimeProperties.ChatStatus))
+		}
+		if event.FocusTimeProperties.DeclineMessage != "" {
+			result.WriteString(fmt.Sprintf("📝 **Decline Message:** %s\n", event.FocusTimeProperties.DeclineMessage))
 		}
 	}
 

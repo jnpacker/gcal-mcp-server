@@ -85,15 +85,19 @@ A comprehensive Model Context Protocol (MCP) server that provides intelligent Go
 
 #### Step 3: Configure Credentials
 
-1. Create the configuration directory:
-   ```bash
-   mkdir -p ~/.config/gcal-mcp-server
-   ```
+**Option 1: Repository Root (Recommended)**
+Place your credentials file in the repository root directory:
+```bash
+cp path/to/downloaded/credentials.json /path/to/gcal-mcp-server/credentials.json
+```
 
-2. Copy your downloaded credentials file:
-   ```bash
-   cp path/to/downloaded/credentials.json ~/.config/gcal-mcp-server/credentials.json
-   ```
+**Option 2: User Configuration Directory**
+```bash
+mkdir -p ~/.config/gcal-mcp-server
+cp path/to/downloaded/credentials.json ~/.config/gcal-mcp-server/credentials.json
+```
+
+The server will automatically detect the repository root and use credentials from there, making it work regardless of where you launch the server from.
 
 #### Step 4: Initial Authentication
 
@@ -110,15 +114,19 @@ A comprehensive Model Context Protocol (MCP) server that provides intelligent Go
 
 ### Credentials Location
 
-The server looks for credentials in the following order:
-1. `./credentials.json` (current directory)
-2. `~/.config/gcal-mcp-server/credentials.json`
+The server automatically detects the repository root by looking for `go.mod` or `.git` files and uses credentials from there. This ensures the server works regardless of where you launch it from.
+
+**Search order:**
+1. Repository root: `<repo-root>/credentials.json` (automatically detected)
+2. Fallback: Current working directory `./credentials.json`
 
 ### Token Storage
 
-Authentication tokens are stored at:
-- `./token.json` (current directory)
-- `~/.config/gcal-mcp-server/token.json`
+Authentication tokens are stored alongside credentials:
+- Repository root: `<repo-root>/token.json` (automatically detected)
+- Fallback: Current working directory `./token.json`
+
+This approach ensures consistent credential access regardless of launch location.
 
 ## 🤖 AI Integration
 
@@ -265,6 +273,12 @@ Create a new calendar event with comprehensive options and automatic availabilit
 - `guest_can_see_other_guests`: Allow guests to see other guests (default: true)
 - `create_meet_link`: Create Google Meet link (default: false)
 - `reminders`: Custom reminder settings
+- `eventType`: Event classification ("default" | "focusTime" | "workingLocation"). Default: "default".
+- `workingLocation`: Only when `eventType` = "workingLocation". Object: `{ "type": "home|office|custom", "label": "<text>" }`.
+- `focusTimeProperties`: Only when `eventType` = "focusTime". Object with:
+  - `autoDeclineMode`: "declineOnlyNew" | "declineAll"
+  - `chatStatus`: "doNotDisturb" | "available"
+  - `declineMessage`: Optional custom decline message
 
 **Enhanced Features:**
 - **Automatic Availability Checking**: Validates all attendee availability before creation
@@ -291,6 +305,38 @@ Create a new calendar event with comprehensive options and automatic availabilit
 }
 ```
 
+#### Event Type Examples
+
+Focus Time block (auto-decline and DND):
+
+```json
+{
+  "summary": "Deep Work - Roadmap Planning",
+  "start_time": "2024-01-16T13:00:00-08:00",
+  "end_time": "2024-01-16T15:00:00-08:00",
+  "visibility": "private",
+  "eventType": "focusTime",
+  "focusTimeProperties": {
+    "autoDeclineMode": "declineOnlyNew",
+    "chatStatus": "doNotDisturb",
+    "declineMessage": "I'm in focus time and will respond after."
+  }
+}
+```
+
+Working Location (all-day indicator):
+
+```json
+{
+  "summary": "Working from Home",
+  "all_day": true,
+  "start_time": "2024-01-17T00:00:00-08:00",
+  "end_time": "2024-01-18T00:00:00-08:00",
+  "eventType": "workingLocation",
+  "workingLocation": { "type": "home", "label": "Working from Home" }
+}
+```
+
 ### 2. edit_event
 
 Update an existing calendar event using true PATCH semantics (only provided fields are modified).
@@ -300,6 +346,8 @@ Update an existing calendar event using true PATCH semantics (only provided fiel
 
 **Optional Parameters:**
 - All parameters from create_event (only provided parameters are updated)
+
+Supports updating event-type specific fields: `eventType`, `workingLocation`, and `focusTimeProperties`.
 
 **Enhanced Features:**
 - **True PATCH Semantics**: Only modifies fields that are explicitly provided
