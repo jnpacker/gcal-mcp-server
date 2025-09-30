@@ -695,6 +695,14 @@ func (ct *CalendarTools) handleGetAttendeeFreeBusy(arguments map[string]interfac
 }
 
 func (ct *CalendarTools) parseEventParams(arguments map[string]interface{}) (EventParams, error) {
+	eventType := getStringOrDefault(arguments, "eventType", "default")
+	visibility := getStringOrDefault(arguments, "visibility", "default")
+
+	// Working location events MUST have public visibility
+	if eventType == "workingLocation" {
+		visibility = "public"
+	}
+
 	params := EventParams{
 		CalendarID:             getStringOrDefault(arguments, "calendar_id", "primary"),
 		Summary:                getStringOrDefault(arguments, "summary", ""),
@@ -702,13 +710,13 @@ func (ct *CalendarTools) parseEventParams(arguments map[string]interface{}) (Eve
 		Location:               getStringOrDefault(arguments, "location", ""),
 		TimeZone:               getStringOrDefault(arguments, "timezone", "UTC"),
 		AllDay:                 getBoolOrDefault(arguments, "all_day", false),
-		Visibility:             getStringOrDefault(arguments, "visibility", "default"),
+		Visibility:             visibility,
 		SendNotifications:      getBoolOrDefault(arguments, "send_notifications", true),
 		GuestCanModify:         getBoolOrDefault(arguments, "guest_can_modify", false),
 		GuestCanInviteOthers:   getBoolOrDefault(arguments, "guest_can_invite_others", true),
 		GuestCanSeeOtherGuests: getBoolOrDefault(arguments, "guest_can_see_other_guests", true),
 		ColorID:                getStringOrDefault(arguments, "colorId", ""),
-		EventType:              getStringOrDefault(arguments, "eventType", "default"),
+		EventType:              eventType,
 	}
 
 	// Parse workingLocation if provided
@@ -844,6 +852,12 @@ func (ct *CalendarTools) parsePatchEventParams(arguments map[string]interface{})
 	}
 	if eventType, ok := arguments["eventType"].(string); ok {
 		params.EventType = &eventType
+
+		// Working location events MUST have public visibility
+		if eventType == "workingLocation" {
+			publicVisibility := "public"
+			params.Visibility = &publicVisibility
+		}
 	}
 
 	// Parse workingLocation if provided

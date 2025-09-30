@@ -101,6 +101,7 @@ When creating events, follow this comprehensive process:
 - Set `workingLocation: {"type": "homeOffice|officeLocation|customLocation", "label": "Custom Location"}` when eventType is "workingLocation"
 - Valid type values: `"homeOffice"`, `"officeLocation"`, or `"customLocation"`
 - Typically all-day events to indicate work location for the day
+- **IMPORTANT**: Working location events automatically have transparency set to "transparent" (don't block time on calendar)
 
 #### Step 4: Enhanced Meeting Features
 **Conference Integration:**
@@ -246,25 +247,41 @@ The `edit_event` tool supports two attendee formats for maximum flexibility:
 ## Response Format Guidelines
 
 ### Event Listing Response:
+**Default Behavior: Hide Declined Events**
+By default, declined events are hidden from the listing to reduce visual clutter. Users can request "show declined" to see all events including declined ones.
+
+**Format with Available Time Slots:**
 ```
 📅 Events for Today (Thursday, September 25) & Tomorrow (Friday, September 26):
 
 | # | Day | Time | Event | My Status | Attendees | Location/Link |
 |---|-----|------|-------|-----------|-----------|---------------|
 | 1 | Thu | All Day | Office | ❓ | N/A | N/A |
-| 2 | Thu | 9:30-10:15 PM | <span style="color: #666;">~~Open Cluster Management Community Meeting~~</span> | ❌ | 8 attendees | [Zoom](https://zoom.us/my/[MEETING_ID]) |
-| 3 | Fri | All Day | Home | ❓ | N/A | N/A |
-| 4 | Fri | 9:00-10:00 AM | Paperwork - Focus time | ❓ | N/A | N/A |
-| 5 | Fri | ⚠️ 9:30-10:00 AM | <span style="color: #666;">~~HCM: Friday Vibe Coding Time~~</span> | ❌ | [USER_EMAIL] | [Meet](https://meet.google.com/[MEETING_ID]) |
-| 6 | Fri | ⚠️ 10:00-10:30 AM | Sovereign infra & fabric follow-up | ✅ | 14 attendees | [Meet](https://meet.google.com/[MEETING_ID]) |
-| 7 | Fri | ⚠️ 10:00 AM-3:00 PM | developing code - Focus time | ❓ | N/A | N/A |
-| 8 | Fri | ⚠️ 11:00-11:30 AM | <span style="color: #666;">~~Konflux Hot Topics - New Invite~~</span> | ❌ | 14 attendees | [Meet](https://meet.google.com/[MEETING_ID]) |
-| 9 | Fri | ⚠️ 11:00-11:30 AM | [ATTENDEE_NAME] & [USER_NAME] Sync up | ✅ | [ATTENDEE_EMAIL] | [Meet](https://meet.google.com/[MEETING_ID]) |
+| A1 | Thu | 9:00-9:30 AM | 🟩 **AVAILABLE** | - | - | - |
+| 2 | Fri | All Day | Home | ❓ | N/A | N/A |
+| 3 | Fri | 9:00-10:00 AM | Paperwork - Focus time | ❓ | N/A | N/A |
+| A2 | Fri | 10:00-11:00 AM | 🟩🟩 **AVAILABLE** | - | - | - |
+| 4 | Fri | ⚠️ 11:00-11:30 AM | Sovereign infra & fabric follow-up | ✅ | 14 attendees | [Meet](https://meet.google.com/[MEETING_ID]) |
+| **➤ 5** | **Fri** | **⚠️ 11:00 AM-3:00 PM** | **developing code - Focus time** ⏰ | **❓** | **N/A** | **N/A** |
+| 6 | Fri | ⚠️ 11:30 AM-12:00 PM | [ATTENDEE_NAME] & [USER_NAME] Sync up | ✅ | [ATTENDEE_EMAIL] | [Meet](https://meet.google.com/[MEETING_ID]) |
+| A3 | Fri | 12:00-1:30 PM | 🟩🟩🟩 **AVAILABLE** | - | - | - |
 
-📊 Total: 9 events | ⚠️ = Overlapping meetings
-Status: ✅ Accepted | ❌ Declined | ⏳ Maybe/Tentative | ❓ No Response
+📊 Total: 6 events | 3 available time slots | Current time: 11:45 AM ⏰ | ⚠️ = Overlapping meetings
+Status: ✅ Accepted | ⏳ Maybe/Tentative | ❓ No Response
 
-Use meeting numbers for actions: "reschedule meeting 2" or "delete meeting 4"
+**➤ Currently in progress** (11:45 AM falls within event time)
+
+**Available Time Slots (for scheduling new events):**
+- A1: Thursday 9:00-9:30 AM (🟩 = 30 min)
+- A2: Friday 10:00-11:00 AM (🟩🟩 = 1 hour)
+- A3: Friday 12:00-1:30 PM (🟩🟩🟩 = 1.5 hours)
+
+🟩 = 30-minute available block
+
+Use meeting numbers for actions: "reschedule meeting 4" or "delete meeting 6"
+Use available slot numbers for scheduling: "schedule in A2" or "book A3"
+
+Note: Declined events hidden by default. Use "show declined" to view all events.
 ```
 
 ### Event Creation Response:
@@ -411,6 +428,7 @@ Key Overlaps Detected:
 #### Working Location Indicators (`eventType: "workingLocation"`):
 - Set `workingLocation` parameter with appropriate type and label
 - Typically all-day events
+- **Automatically set to "transparent"** - won't block time on calendar or show as busy
 - Examples:
   - `workingLocation: {"type": "homeOffice", "label": "Working from Home"}`
   - `workingLocation: {"type": "officeLocation", "label": "Red Hat Office - Raleigh"}`
@@ -543,24 +561,60 @@ Key Overlaps Detected:
     - Calculate overlaps by checking if any two events have overlapping time periods
     - **CRITICAL: Only consider meetings that the user has NOT declined when detecting overlaps**
     - Declined meetings (user status = ❌) should NOT be counted as overlapping since the user won't be attending
+    - **NEVER mark declined meetings with ⚠️ emoji** - they are not overlaps for the user
     - Show clear visual indication of scheduling conflicts to help users identify double-bookings
     - **Large meeting overlap suggestion**: When a meeting with 15+ attendees is part of an overlap, suggest declining it with the reasoning that large meetings are often optional and can be watched as recordings later
     - **Dynamic overlap recalculation**: After a meeting is declined, immediately recalculate overlaps excluding the newly declined meeting to provide accurate conflict detection
-19. **Strike through declined events** with dark grey text using `<span style="color: #666;">~~Event Name~~</span>` format
-20. **Handle meetings where all other attendees have declined**:
+19. **Strike through declined events** with dark grey text in both Time and Event columns:
+    - **ALWAYS apply strikethrough to BOTH Time AND Event columns** for declined meetings
+    - Use format: `<span style="color: #666;">~~Time~~</span>` for Time column
+    - Use format: `<span style="color: #666;">~~Event Name~~</span>` for Event column
+    - This makes it visually clear which meetings the user is not attending
+    - **NEVER apply ⚠️ emoji to declined meetings** since the user won't be attending
+20. **Pay attention to table formatting and line wrapping**:
+    - Ensure table cells properly wrap long content within reasonable column widths
+    - Keep Time column compact (use time ranges like "10:00-10:30 AM")
+    - Event names should wrap naturally without breaking table structure
+    - Location/Link column should use markdown links to keep text concise
+    - Test that tables render correctly without horizontal overflow
+21. **Handle meetings where all other attendees have declined**:
     - When all attendees except the user have declined a meeting, suggest either declining or deleting the meeting
     - Apply strikethrough formatting to both Time and Event columns using `<span style="color: #666;">~~Time~~</span>` and `<span style="color: #666;">~~Event Name~~</span>` format
     - This makes it visually clear which meetings are effectively cancelled due to lack of attendance
-21. **Use timeline visualization** when users specifically request a "timeline" view for events:
+22. **Use timeline visualization** when users specifically request a "timeline" view for events:
     - Switch from standard table format to Gantt chart style visualization
     - Show events as ██ blocks across hourly time columns
     - Highlight overlaps and conflicts visually
     - Obfuscate PII data in event names using placeholders
     - Include legend and overlap summary for clarity
-22. **Apply standard color coding** when creating events:
+23. **Apply standard color coding** when creating events:
     - Use Color ID 5 (Yellow) for Focus Time events
     - Use Color ID 4 (Red) for Sync Up/1:1 meetings
     - Use Color ID 2 (Blue) for Team meetings and group sessions
+24. **Hide declined events by default** when listing events:
+    - Only show events that are accepted, tentative, or need action
+    - Exclude events where user's attendance status is "declined"
+    - Users can request "show declined" to view all events including declined ones
+    - This reduces visual clutter and focuses on relevant meetings
+25. **Display available time slots** between meetings in event listings:
+    - Calculate gaps between consecutive meetings during business hours (typically 9 AM - 5 PM)
+    - Show available time slots with green square (🟩) indicators in the Event column
+    - Each 🟩 represents 30 minutes of available time
+    - Enumerate available slots with "A" prefix (A1, A2, A3, etc.)
+    - List available time slots separately below the table for easy reference
+    - Allow users to reference available slots when scheduling new events (e.g., "schedule in A2")
+    - Only show available slots of 30 minutes or longer
+    - Exclude time blocks that overlap with focus time or other events
+    - Display multiple green squares for longer availability (🟩🟩 = 1 hour, 🟩🟩🟩 = 1.5 hours, etc.)
+26. **Highlight the current event** in event listings:
+    - Get current time using system commands when listing events
+    - Identify which event is currently in progress (current time falls between start_time and end_time)
+    - Highlight the current event row using bold formatting with ➤ arrow prefix in the # column
+    - Bold all columns for the current event row
+    - Add ⏰ emoji after the event name to indicate it's currently happening
+    - Include current time in the footer: "Current time: [TIME] ⏰"
+    - Add note below table: "**➤ Currently in progress** ([TIME] falls within event time)"
+    - This helps users quickly identify what they should be doing right now
 
 ## Error Recovery
 

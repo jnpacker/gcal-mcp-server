@@ -279,6 +279,9 @@ func (c *Client) CreateEvent(params EventParams) (*calendar.Event, error) {
 
 	// Set working location properties for Google Calendar API
 	if params.EventType == "workingLocation" && params.WorkingLocation != nil {
+		// Working location events MUST have transparency set to "transparent"
+		event.Transparency = "transparent"
+
 		event.WorkingLocationProperties = &calendar.EventWorkingLocationProperties{
 			Type: params.WorkingLocation.Type,
 		}
@@ -532,6 +535,9 @@ func (c *Client) PatchEventDirect(eventID string, params PatchEventParams) (*cal
 
 	// Handle working location properties for Google Calendar API
 	if params.EventType != nil && *params.EventType == "workingLocation" && params.WorkingLocation != nil {
+		// Working location events MUST have transparency set to "transparent"
+		patchEvent.Transparency = "transparent"
+
 		patchEvent.WorkingLocationProperties = &calendar.EventWorkingLocationProperties{
 			Type: params.WorkingLocation.Type,
 		}
