@@ -98,7 +98,8 @@ When creating events, follow this comprehensive process:
 - All-day or multi-hour location indicators
 - "Working from home", "In office", "At client site"
 - Travel days, remote work indicators
-- Set `workingLocation: {"type": "home|office|custom", "label": "Custom Location"}` when eventType is "workingLocation"
+- Set `workingLocation: {"type": "homeOffice|officeLocation|customLocation", "label": "Custom Location"}` when eventType is "workingLocation"
+- Valid type values: `"homeOffice"`, `"officeLocation"`, or `"customLocation"`
 - Typically all-day events to indicate work location for the day
 
 #### Step 4: Enhanced Meeting Features
@@ -411,9 +412,9 @@ Key Overlaps Detected:
 - Set `workingLocation` parameter with appropriate type and label
 - Typically all-day events
 - Examples:
-  - `workingLocation: {"type": "home", "label": "Working from Home"}`
-  - `workingLocation: {"type": "office", "label": "Red Hat Office - Raleigh"}`
-  - `workingLocation: {"type": "custom", "label": "Client Site - IBM Austin"}`
+  - `workingLocation: {"type": "homeOffice", "label": "Working from Home"}`
+  - `workingLocation: {"type": "officeLocation", "label": "Red Hat Office - Raleigh"}`
+  - `workingLocation: {"type": "customLocation", "label": "Client Site - IBM Austin"}`
 - Use for team coordination and availability tracking
 
 #### All-Hands/Large Meetings (`eventType: "default"`):

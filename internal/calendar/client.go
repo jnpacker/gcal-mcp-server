@@ -61,7 +61,7 @@ type EventParams struct {
 
 // WorkingLocationParams represents working location information for events
 type WorkingLocationParams struct {
-	Type  string `json:"type"`  // "home", "office", or "custom"
+	Type  string `json:"type"`  // "homeOffice", "officeLocation", or "customLocation"
 	Label string `json:"label"` // Custom label for the location
 }
 
@@ -274,6 +274,28 @@ func (c *Client) CreateEvent(params EventParams) (*calendar.Event, error) {
 			event.ExtendedProperties.Private["focusTimeAutoDeclineMode"] = params.FocusTimeProperties.AutoDeclineMode
 			event.ExtendedProperties.Private["focusTimeChatStatus"] = params.FocusTimeProperties.ChatStatus
 			event.ExtendedProperties.Private["focusTimeDeclineMessage"] = params.FocusTimeProperties.DeclineMessage
+		}
+	}
+
+	// Set working location properties for Google Calendar API
+	if params.EventType == "workingLocation" && params.WorkingLocation != nil {
+		event.WorkingLocationProperties = &calendar.EventWorkingLocationProperties{
+			Type: params.WorkingLocation.Type,
+		}
+
+		// Set the appropriate nested field based on the type
+		switch params.WorkingLocation.Type {
+		case "homeOffice":
+			// HomeOffice just needs to be present (empty object)
+			event.WorkingLocationProperties.HomeOffice = struct{}{}
+		case "officeLocation":
+			event.WorkingLocationProperties.OfficeLocation = &calendar.EventWorkingLocationPropertiesOfficeLocation{
+				Label: params.WorkingLocation.Label,
+			}
+		case "customLocation":
+			event.WorkingLocationProperties.CustomLocation = &calendar.EventWorkingLocationPropertiesCustomLocation{
+				Label: params.WorkingLocation.Label,
+			}
 		}
 	}
 
@@ -505,6 +527,28 @@ func (c *Client) PatchEventDirect(eventID string, params PatchEventParams) (*cal
 		if params.WorkingLocation != nil {
 			patchEvent.ExtendedProperties.Private["workingLocationType"] = params.WorkingLocation.Type
 			patchEvent.ExtendedProperties.Private["workingLocationLabel"] = params.WorkingLocation.Label
+		}
+	}
+
+	// Handle working location properties for Google Calendar API
+	if params.EventType != nil && *params.EventType == "workingLocation" && params.WorkingLocation != nil {
+		patchEvent.WorkingLocationProperties = &calendar.EventWorkingLocationProperties{
+			Type: params.WorkingLocation.Type,
+		}
+
+		// Set the appropriate nested field based on the type
+		switch params.WorkingLocation.Type {
+		case "homeOffice":
+			// HomeOffice just needs to be present (empty object)
+			patchEvent.WorkingLocationProperties.HomeOffice = struct{}{}
+		case "officeLocation":
+			patchEvent.WorkingLocationProperties.OfficeLocation = &calendar.EventWorkingLocationPropertiesOfficeLocation{
+				Label: params.WorkingLocation.Label,
+			}
+		case "customLocation":
+			patchEvent.WorkingLocationProperties.CustomLocation = &calendar.EventWorkingLocationPropertiesCustomLocation{
+				Label: params.WorkingLocation.Label,
+			}
 		}
 	}
 

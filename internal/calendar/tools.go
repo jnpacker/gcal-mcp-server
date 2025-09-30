@@ -170,8 +170,8 @@ func (ct *CalendarTools) GetTools() []mcp.Tool {
 						"properties": map[string]interface{}{
 							"type": map[string]interface{}{
 								"type":        "string",
-								"description": "Working location type: 'home', 'office', or 'custom'",
-								"enum":        []string{"home", "office", "custom"},
+								"description": "Working location type: 'homeOffice', 'officeLocation', or 'customLocation'",
+								"enum":        []string{"homeOffice", "officeLocation", "customLocation"},
 							},
 							"label": map[string]interface{}{
 								"type":        "string",
@@ -296,8 +296,8 @@ func (ct *CalendarTools) GetTools() []mcp.Tool {
 						"properties": map[string]interface{}{
 							"type": map[string]interface{}{
 								"type":        "string",
-								"description": "Working location type: 'home', 'office', or 'custom'",
-								"enum":        []string{"home", "office", "custom"},
+								"description": "Working location type: 'homeOffice', 'officeLocation', or 'customLocation'",
+								"enum":        []string{"homeOffice", "officeLocation", "customLocation"},
 							},
 							"label": map[string]interface{}{
 								"type":        "string",
