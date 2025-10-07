@@ -262,7 +262,7 @@ By default, declined events are hidden from the listing to reduce visual clutter
 | 3 | Fri | 9:00-10:00 AM | Paperwork - Focus time | 🎧 | N/A | N/A |
 | A2 | Fri | 10:00-11:00 AM | 🟩🟩 **AVAILABLE** | - | - | - |
 | 4 | Fri | ⚠️ 11:00-11:30 AM | Sovereign infra & fabric follow-up | ✅ | 14 attendees | [Meet](https://meet.google.com/[MEETING_ID]) |
-| **➤ 5** | **Fri** | **⚠️ 11:00 AM-3:00 PM** | **developing code - Focus time** ⏰ | **🎧** | **N/A** | **N/A** |
+| ➤ 5 | Fri | ⚠️ 11:00 AM-3:00 PM | **developing code - Focus time** ⏰ | 🎧 | N/A | N/A |
 | 6 | Fri | ⚠️ 11:30 AM-12:00 PM | [ATTENDEE_NAME] & [USER_NAME] Sync up | ✅ | [ATTENDEE_EMAIL] | [Meet](https://meet.google.com/[MEETING_ID]) |
 | A3 | Fri | 12:00-1:30 PM | 🟩🟩🟩 **AVAILABLE** | - | - | - |
 
@@ -302,7 +302,7 @@ Event ID: abc123def456 (save this for future edits)
 ```
 ✅ Focus Time created successfully:
 
-🧠 Focus Time: Deep work - Database optimization
+🎧 Focus Time: Deep work - Database optimization
 🕐 Time: January 15, 2024 at 2:00 PM - 4:00 PM (PST)
 🔒 Private event (no attendees)
 🛡️ Auto-decline Mode: declineOnlyNew
