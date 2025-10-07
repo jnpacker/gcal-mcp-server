@@ -252,34 +252,33 @@ By default, declined events are hidden from the listing to reduce visual clutter
 
 **Format with Available Time Slots:**
 ```
-📅 Events for Today (Thursday, September 25) & Tomorrow (Friday, September 26):
+📅 Events for Today (Tuesday, October 7):
 
 | # | Day | Time | Event | RSP | Attendees | Location/Link |
-|---|-----|------|-------|-----------|-----------|---------------------------------------------------|
-| 1 | Thu | All Day | Office | 🏢 | N/A | N/A |
-| A1 | Thu | 9:00-9:30 AM | 🟩 **AVAILABLE** | - | - | - |
-| 2 | Fri | All Day | Home | 🏠 | N/A | N/A |
-| 3 | Fri | 9:00-10:00 AM | Paperwork - Focus time | 🎧 | N/A | N/A |
-| A2 | Fri | 10:00-11:00 AM | 🟩🟩 **AVAILABLE** | - | - | - |
-| 4 | Fri | ⚠️ 11:00-11:30 AM | Sovereign infra & fabric follow-up | ✅ | 14 attendees | [Meet](https://meet.google.com/[MEETING_ID]) |
-| ➤ 5 | Fri | ⚠️ 11:00 AM-3:00 PM | **developing code - Focus time** ⏰ | 🎧 | N/A | N/A |
-| 6 | Fri | ⚠️ 11:30 AM-12:00 PM | [ATTENDEE_NAME] & [USER_NAME] Sync up | ✅ | [ATTENDEE_EMAIL] | [Meet](https://meet.google.com/[MEETING_ID]) |
-| A3 | Fri | 12:00-1:30 PM | 🟩🟩🟩 **AVAILABLE** | - | - | - |
+|---|---|---|---|---|---|---|
+| 1 | Tue | All Day | Office | 🏢 | N/A | N/A |
+| A1 | Tue | 9:00-10:00 AM | 🟩🟩 **AVAILABLE** | - | - | - |
+| 2 | Tue | 10:00-10:30 AM| Team Sync | ✅ | 5 attendees | [Meet](https://meet.google.com/[MEETING_ID]) |
+| 3 | Tue | 10:30-11:30 AM| Project Planning | ✅ | 3 attendees | [Meet](https://meet.google.com/[MEETING_ID]) |
+| A2 | Tue | 11:30 AM-1:00 PM| 🟩🟩🟩 **AVAILABLE** | - | - | - |
+| ➤ 4 | Tue | 1:00-3:00 PM | **Focus Time: Code Review** ⏰ | 🎧 | N/A | N/A |
+| 5 | Tue | 3:00-4:00 PM | 1:1 with Manager | ✅ | 1 attendees | [Meet](https://meet.google.com/[MEETING_ID]) |
+| A3 | Tue | 4:00-5:00 PM | 🟩🟩 **AVAILABLE** | - | - | - |
 
-📊 Total: 6 events | 3 available time slots | Current time: 11:45 AM ⏰ | ⚠️ = Overlapping meetings
+📊 Total: 5 events | 3 available time slots | Current time: 1:15 PM ⏰
 Status: ✅ Accepted | ⏳ Maybe/Tentative | ❓ No Response
 
-**➤ Currently in progress** (11:45 AM falls within event time)
+**➤ Currently in progress** (1:15 PM falls within event time)
 
 **Available Time Slots (for scheduling new events):**
-- A1: Thursday 9:00-9:30 AM (🟩 = 30 min)
-- A2: Friday 10:00-11:00 AM (🟩🟩 = 1 hour)
-- A3: Friday 12:00-1:30 PM (🟩🟩🟩 = 1.5 hours)
+- A1: Tuesday 9:00-10:00 AM (🟩🟩 = 1 hour)
+- A2: Tuesday 11:30 AM-1:00 PM (🟩🟩🟩 = 1.5 hours)
+- A3: Tuesday 4:00-5:00 PM (🟩🟩 = 1 hour)
 
 🟩 = 30-minute available block
 
-Use meeting numbers for actions: "reschedule meeting 4" or "delete meeting 6"
-Use available slot numbers for scheduling: "schedule in A2" or "book A3"
+Use meeting numbers for actions: "reschedule meeting 4" or "delete meeting 2"
+Use available slot numbers for scheduling: "schedule in A1" or "book A3"
 
 Note: Declined events hidden by default. Use "show declined" to view all events.
 ```
@@ -529,7 +528,7 @@ Event ID: ghi345jkl678 (save this for future edits)
     - Show clear visual indication of scheduling conflicts to help users identify double-bookings.
     - **Large meeting overlap suggestion**: When a meeting with 15+ attendees is part of an overlap, suggest declining it with the reasoning that large meetings are often optional and can be watched as recordings later.
     - **Dynamic overlap recalculation**: After a meeting is declined, immediately recalculate overlaps excluding the newly declined meeting to provide accurate conflict detection.
-19. **Strike through declined events** with dark grey text in both Time and Event columns:
+19. **When the user requests to see declined events, strike them through** with dark grey text in both Time and Event columns:
     - **ALWAYS apply strikethrough to BOTH Time AND Event columns** for declined meetings.
     - Use format: `<span style="color: #666;">~~Time~~</span>` for Time column.
     - Use format: `<span style="color: #666;">~~Event Name~~</span>` for Event column.
@@ -551,10 +550,10 @@ Event ID: ghi345jkl678 (save this for future edits)
     - Use Color ID 4 (Red) for Sync Up/1:1 meetings.
     - Use Color ID 2 (Blue) for Team meetings and group sessions.
 23. **Hide declined events by default** when listing events:
-    - Only show events that are accepted, tentative, or need action.
-    - Exclude events where user's attendance status is "declined".
-    - Users can request "show declined" to view all events including declined ones.
-    - This reduces visual clutter and focuses on relevant meetings.
+    - **CRITICAL**: By default, when listing events, you MUST NOT show any event where the user's (`[USER_EMAIL]`) `response_status` is `declined`.
+    - Only show events that are accepted, tentative, or need action from the user.
+    - If the user explicitly asks to see declined events (e.g., "show declined events"), then and only then should you display them, using the strikethrough formatting described in rule #19.
+    - This is to reduce visual clutter and focus on relevant meetings.
 24. **Display available time slots** between meetings in event listings:
     - Calculate gaps between consecutive meetings during business hours (typically 9 AM - 5 PM).
     - Show available time slots with green square (🟩) indicators in the Event column.
