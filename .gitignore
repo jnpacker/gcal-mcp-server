@@ -1,5 +1,6 @@
 bin/
 .claude/
+.gemini/
 token.json
 credentials.json
 .mcp.json

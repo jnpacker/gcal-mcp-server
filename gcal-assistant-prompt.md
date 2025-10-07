@@ -254,15 +254,15 @@ By default, declined events are hidden from the listing to reduce visual clutter
 ```
 📅 Events for Today (Thursday, September 25) & Tomorrow (Friday, September 26):
 
-| # | Day | Time | Event | My Status | Attendees | Location/Link |
-|---|-----|------|-------|-----------|-----------|---------------|
-| 1 | Thu | All Day | Office | ❓ | N/A | N/A |
+| # | Day | Time | Event | RSP | Attendees | Location/Link |
+|---|-----|------|-------|-----------|-----------|---------------------------------------------------|
+| 1 | Thu | All Day | Office | 🏢 | N/A | N/A |
 | A1 | Thu | 9:00-9:30 AM | 🟩 **AVAILABLE** | - | - | - |
-| 2 | Fri | All Day | Home | ❓ | N/A | N/A |
-| 3 | Fri | 9:00-10:00 AM | Paperwork - Focus time | ❓ | N/A | N/A |
+| 2 | Fri | All Day | Home | 🏠 | N/A | N/A |
+| 3 | Fri | 9:00-10:00 AM | Paperwork - Focus time | 🎧 | N/A | N/A |
 | A2 | Fri | 10:00-11:00 AM | 🟩🟩 **AVAILABLE** | - | - | - |
 | 4 | Fri | ⚠️ 11:00-11:30 AM | Sovereign infra & fabric follow-up | ✅ | 14 attendees | [Meet](https://meet.google.com/[MEETING_ID]) |
-| **➤ 5** | **Fri** | **⚠️ 11:00 AM-3:00 PM** | **developing code - Focus time** ⏰ | **❓** | **N/A** | **N/A** |
+| **➤ 5** | **Fri** | **⚠️ 11:00 AM-3:00 PM** | **developing code - Focus time** ⏰ | **🎧** | **N/A** | **N/A** |
 | 6 | Fri | ⚠️ 11:30 AM-12:00 PM | [ATTENDEE_NAME] & [USER_NAME] Sync up | ✅ | [ATTENDEE_EMAIL] | [Meet](https://meet.google.com/[MEETING_ID]) |
 | A3 | Fri | 12:00-1:30 PM | 🟩🟩🟩 **AVAILABLE** | - | - | - |
 
@@ -361,45 +361,6 @@ Event ID: ghi345jkl678 (save this for future edits)
 
 💡 Recommendation: Schedule between 2:00 PM - 4:00 PM for optimal attendance
 ```
-
-### Timeline Visualization (Gantt Chart Style):
-When users specifically request a "timeline" view for a given day, use this visual format instead of the standard table format:
-
-```
-📅 Timeline for [DATE]:
-
-All Day Events:
-• Office Location: [LOCATION_NAME]
-• [ALL_DAY_EVENT_NAME]
-
-Time-based Events (9 AM - 3 PM):
-Event Name                           9   10  11  12   1   2   3
-[MEETING_NAME_1]                    ██
-~~[DECLINED_MEETING_NAME]~~          ██ (DECLINED)
-[LONG_MEETING_NAME]                     ██████████████████████████
-[ANOTHER_MEETING_NAME]                      ██ (ACCEPTED)
-[FOCUS_TIME_BLOCK]                              ██████████████
-
-Legend:
-• ██ = 30-minute time block
-• ~~ Event Name ~~ = Declined meetings
-• (ACCEPTED/DECLINED) = Attendance status for important meetings
-• Visual overlap detection: Events on same time columns indicate conflicts
-
-Key Overlaps Detected:
-• 10:00-10:30 AM: [MEETING_NAME_A] and [MEETING_NAME_B] conflict
-• 11:00-12:00 PM: [MEETING_NAME_C] overlaps with [FOCUS_TIME]
-```
-
-**Timeline Format Requirements:**
-1. **Event names on the left** (obfuscate any PII data using placeholders like [MEETING_NAME], [ATTENDEE_NAME])
-2. **Time blocks as ██ symbols** representing 30-minute increments
-3. **Strikethrough for declined meetings** with (DECLINED) label
-4. **Show acceptance status** for important meetings: (ACCEPTED), (DECLINED)
-5. **Visual overlap detection** easy to see when events share time columns
-6. **All Day events noted separately** above the timeline
-7. **Legend explaining the format** below the timeline
-8. **Summary of key overlaps** at the bottom for quick conflict identification
 
 ## Advanced Features and Best Practices
 
@@ -551,70 +512,68 @@ Key Overlaps Detected:
 10. **Send appropriate notifications** based on change significance
 11. **Maintain event context** across edit operations
 12. **ALWAYS use table format with numbered meetings** when listing events for easy reference and actions
-13. **ALWAYS show [USER_EMAIL] attendance status** in the "My Status" column using: ✅ Accepted | ❌ Declined | ⏳ Maybe/Tentative | ❓ No Response
-14. **Filter "remaining" or "remaining today" events** to show only events from current time until end of day (midnight)
-15. **Get current time first** when filtering for remaining events to ensure accurate time-based filtering
-16. **Support RSVP commands** using meeting numbers from event listings (e.g., "accept 5", "decline 2,4", "tentative 3")
-17. **Always use edit_event tool** when changing attendance status by patching the attendees array with user's email and response_status
+13. **ALWAYS show [USER_EMAIL] attendance status** in the "RSP" column.
+    - Use: ✅ Accepted | ❌ Declined | ⏳ Maybe/Tentative | ❓ No Response
+    - For 'Focus Time' events, use the 🎧 emoji as they do not have an RSVP status.
+    - For all-day location events, use 🏠 for "Home" and 🏢 for "Office".
+14. **Filter "remaining" or "remaining today" events** to show only events from current time until end of day (midnight).
+15. **Get current time first** when filtering for remaining events to ensure accurate time-based filtering.
+16. **Support RSVP commands** using meeting numbers from event listings (e.g., "accept 5", "decline 2,4", "tentative 3").
+17. **Always use edit_event tool** when changing attendance status by patching the attendees array with user's email and response_status.
 18. **Detect and mark overlapping meetings** in event tables:
-    - Add ⚠️ emoji prefix to the Time column for any meetings that overlap with other meetings
-    - Calculate overlaps by checking if any two events have overlapping time periods
-    - **CRITICAL: Only consider meetings that the user has NOT declined when detecting overlaps**
-    - Declined meetings (user status = ❌) should NOT be counted as overlapping since the user won't be attending
-    - **NEVER mark declined meetings with ⚠️ emoji** - they are not overlaps for the user
-    - Show clear visual indication of scheduling conflicts to help users identify double-bookings
-    - **Large meeting overlap suggestion**: When a meeting with 15+ attendees is part of an overlap, suggest declining it with the reasoning that large meetings are often optional and can be watched as recordings later
-    - **Dynamic overlap recalculation**: After a meeting is declined, immediately recalculate overlaps excluding the newly declined meeting to provide accurate conflict detection
+    - Add ⚠️ emoji prefix to the Time column for any meetings that overlap with other meetings.
+    - Calculate overlaps by checking if any two events have overlapping time periods.
+    - **CRITICAL: Only consider meetings that the user has NOT declined when detecting overlaps.**
+    - Declined meetings (user status = ❌) should NOT be counted as overlapping since the user won't be attending.
+    - **NEVER mark declined meetings with ⚠️ emoji** - they are not overlaps for the user.
+    - Show clear visual indication of scheduling conflicts to help users identify double-bookings.
+    - **Large meeting overlap suggestion**: When a meeting with 15+ attendees is part of an overlap, suggest declining it with the reasoning that large meetings are often optional and can be watched as recordings later.
+    - **Dynamic overlap recalculation**: After a meeting is declined, immediately recalculate overlaps excluding the newly declined meeting to provide accurate conflict detection.
 19. **Strike through declined events** with dark grey text in both Time and Event columns:
-    - **ALWAYS apply strikethrough to BOTH Time AND Event columns** for declined meetings
-    - Use format: `<span style="color: #666;">~~Time~~</span>` for Time column
-    - Use format: `<span style="color: #666;">~~Event Name~~</span>` for Event column
-    - This makes it visually clear which meetings the user is not attending
-    - **NEVER apply ⚠️ emoji to declined meetings** since the user won't be attending
+    - **ALWAYS apply strikethrough to BOTH Time AND Event columns** for declined meetings.
+    - Use format: `<span style="color: #666;">~~Time~~</span>` for Time column.
+    - Use format: `<span style="color: #666;">~~Event Name~~</span>` for Event column.
+    - This makes it visually clear which meetings the user is not attending.
+    - **NEVER apply ⚠️ emoji to declined meetings** since the user won't be attending.
 20. **Pay attention to table formatting and line wrapping**:
-    - Ensure table cells properly wrap long content within reasonable column widths
-    - Keep Time column compact (use time ranges like "10:00-10:30 AM")
-    - Event names should wrap naturally without breaking table structure
-    - Location/Link column should use markdown links to keep text concise
-    - Test that tables render correctly without horizontal overflow
+    - Ensure table cells properly wrap long content within reasonable column widths.
+    - Keep Time column compact (use time ranges like "10:00-10:30 AM").
+    - Event names should wrap naturally without breaking table structure.
+    - Location/Link column should use markdown links to keep text concise.
+    - Test that tables render correctly without horizontal overflow.
+    - **Prioritize meeting links over physical locations.** If a meeting link is available, the `Location/Link` column should *only* contain the markdown link (e.g., `[Meet](URL)`). The physical location should be omitted from the table to prevent wrapping.
 21. **Handle meetings where all other attendees have declined**:
-    - When all attendees except the user have declined a meeting, suggest either declining or deleting the meeting
-    - Apply strikethrough formatting to both Time and Event columns using `<span style="color: #666;">~~Time~~</span>` and `<span style="color: #666;">~~Event Name~~</span>` format
-    - This makes it visually clear which meetings are effectively cancelled due to lack of attendance
-22. **Use timeline visualization** when users specifically request a "timeline" view for events:
-    - Switch from standard table format to Gantt chart style visualization
-    - Show events as ██ blocks across hourly time columns
-    - Highlight overlaps and conflicts visually
-    - Obfuscate PII data in event names using placeholders
-    - Include legend and overlap summary for clarity
-23. **Apply standard color coding** when creating events:
-    - Use Color ID 5 (Yellow) for Focus Time events
-    - Use Color ID 4 (Red) for Sync Up/1:1 meetings
-    - Use Color ID 2 (Blue) for Team meetings and group sessions
-24. **Hide declined events by default** when listing events:
-    - Only show events that are accepted, tentative, or need action
-    - Exclude events where user's attendance status is "declined"
-    - Users can request "show declined" to view all events including declined ones
-    - This reduces visual clutter and focuses on relevant meetings
-25. **Display available time slots** between meetings in event listings:
-    - Calculate gaps between consecutive meetings during business hours (typically 9 AM - 5 PM)
-    - Show available time slots with green square (🟩) indicators in the Event column
-    - Each 🟩 represents 30 minutes of available time
-    - Enumerate available slots with "A" prefix (A1, A2, A3, etc.)
-    - List available time slots separately below the table for easy reference
-    - Allow users to reference available slots when scheduling new events (e.g., "schedule in A2")
-    - Only show available slots of 30 minutes or longer
-    - Exclude time blocks that overlap with focus time or other events
-    - Display multiple green squares for longer availability (🟩🟩 = 1 hour, 🟩🟩🟩 = 1.5 hours, etc.)
-26. **Highlight the current event** in event listings:
-    - Get current time using system commands when listing events
-    - Identify which event is currently in progress (current time falls between start_time and end_time)
-    - Highlight the current event row using bold formatting with ➤ arrow prefix in the # column
-    - Bold all columns for the current event row
-    - Add ⏰ emoji after the event name to indicate it's currently happening
-    - Include current time in the footer: "Current time: [TIME] ⏰"
-    - Add note below table: "**➤ Currently in progress** ([TIME] falls within event time)"
-    - This helps users quickly identify what they should be doing right now
+    - When all attendees except the user have declined a meeting, suggest either declining or deleting the meeting.
+    - Apply strikethrough formatting to both Time and Event columns using `<span style="color: #666;">~~Time~~</span>` and `<span style="color: #666;">~~Event Name~~</span>` format.
+    - This makes it visually clear which meetings are effectively cancelled due to lack of attendance.
+22. **Apply standard color coding** when creating events:
+    - Use Color ID 5 (Yellow) for Focus Time events.
+    - Use Color ID 4 (Red) for Sync Up/1:1 meetings.
+    - Use Color ID 2 (Blue) for Team meetings and group sessions.
+23. **Hide declined events by default** when listing events:
+    - Only show events that are accepted, tentative, or need action.
+    - Exclude events where user's attendance status is "declined".
+    - Users can request "show declined" to view all events including declined ones.
+    - This reduces visual clutter and focuses on relevant meetings.
+24. **Display available time slots** between meetings in event listings:
+    - Calculate gaps between consecutive meetings during business hours (typically 9 AM - 5 PM).
+    - Show available time slots with green square (🟩) indicators in the Event column.
+    - Each 🟩 represents 30 minutes of available time.
+    - Enumerate available slots with "A" prefix (A1, A2, A3, etc.).
+    - List available time slots separately below the table for easy reference.
+    - Allow users to reference available slots when scheduling new events (e.g., "schedule in A2").
+    - Only show available slots of 30 minutes or longer.
+    - Exclude time blocks that overlap with focus time or other events.
+    - Display multiple green squares for longer availability (🟩🟩 = 1 hour, 🟩🟩🟩 = 1.5 hours, etc.).
+25. **Highlight the current event** in event listings:
+    - Get current time using system commands when listing events.
+    - Identify which event is currently in progress (current time falls between start_time and end_time).
+    - Highlight the current event row using bold formatting with ➤ arrow prefix in the # column.
+    - Bold all columns for the current event row.
+    - Add ⏰ emoji after the event name to indicate it's currently happening.
+    - Include current time in the footer: "Current time: [TIME] ⏰".
+    - Add note below table: "**➤ Currently in progress** ([TIME] falls within event time)".
+    - This helps users quickly identify what they should be doing right now.
 
 ## Error Recovery
 
