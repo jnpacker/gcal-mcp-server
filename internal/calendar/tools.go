@@ -436,6 +436,11 @@ func (ct *CalendarTools) GetTools() []mcp.Tool {
 						"description": "Whether to include deleted events (defaults to false)",
 						"default":     false,
 					},
+					"show_declined": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Whether to include events that you have declined (defaults to false)",
+						"default":     false,
+					},
 					"order_by": map[string]interface{}{
 						"type":        "string",
 						"description": "Order of events. Options: 'startTime', 'updated' (defaults to 'startTime')",
@@ -444,6 +449,53 @@ func (ct *CalendarTools) GetTools() []mcp.Tool {
 					},
 				},
 				Required: []string{},
+			},
+		},
+		{
+			Name:        "detect_overlaps",
+			Description: "Detect overlapping events for a proposed time range. Returns detailed information about any conflicts, including overlap duration and type.",
+			InputSchema: mcp.ToolSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"calendar_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Calendar ID (defaults to 'primary' for user's main calendar)",
+						"default":     "primary",
+					},
+					"proposed_start": map[string]interface{}{
+						"type":        "string",
+						"description": "Proposed start time in RFC3339 format (REQUIRED). Example: '2024-01-15T10:00:00-08:00'",
+					},
+					"proposed_end": map[string]interface{}{
+						"type":        "string",
+						"description": "Proposed end time in RFC3339 format (REQUIRED). Example: '2024-01-15T11:00:00-08:00'",
+					},
+					"timezone": map[string]interface{}{
+						"type":        "string",
+						"description": "Time zone for the query (defaults to UTC). Example: 'America/New_York'",
+						"default":     "UTC",
+					},
+					"exclude_event_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Event ID to exclude from overlap detection (useful when rescheduling an existing event)",
+					},
+					"include_declined": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Whether to consider declined events as conflicts (defaults to false)",
+						"default":     false,
+					},
+					"include_all_day": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Whether to consider all-day events as conflicts (defaults to false)",
+						"default":     false,
+					},
+					"include_tentative": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Whether to consider tentative events as conflicts (defaults to true)",
+						"default":     true,
+					},
+				},
+				Required: []string{"proposed_start", "proposed_end"},
 			},
 		},
 	}
@@ -465,6 +517,8 @@ func (ct *CalendarTools) HandleTool(name string, arguments map[string]interface{
 		return ct.handleGetAttendeeFreeBusy(arguments)
 	case "list_events":
 		return ct.handleListEvents(arguments)
+	case "detect_overlaps":
+		return ct.handleDetectOverlaps(arguments)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
@@ -1025,6 +1079,7 @@ func (ct *CalendarTools) handleListEvents(arguments map[string]interface{}) (*mc
 		TimeZone:     getStringOrDefault(arguments, "timezone", "UTC"),
 		MaxResults:   int64(getIntOrDefault(arguments, "max_results", 250)),
 		ShowDeleted:  getBoolOrDefault(arguments, "show_deleted", false),
+		ShowDeclined: getBoolOrDefault(arguments, "show_declined", false),
 		SingleEvents: true,
 		OrderBy:      getStringOrDefault(arguments, "order_by", "startTime"),
 	}
@@ -1307,4 +1362,163 @@ func (ct *CalendarTools) formatSingleEvent(result *strings.Builder, event *calen
 	result.WriteString(fmt.Sprintf("🆔 **Event ID:** %s\n", event.Id))
 
 	result.WriteString("\n")
+}
+
+func (ct *CalendarTools) handleDetectOverlaps(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
+	// Parse required parameters
+	proposedStartStr, ok := arguments["proposed_start"].(string)
+	if !ok || proposedStartStr == "" {
+		return nil, fmt.Errorf("proposed_start is required")
+	}
+
+	proposedEndStr, ok := arguments["proposed_end"].(string)
+	if !ok || proposedEndStr == "" {
+		return nil, fmt.Errorf("proposed_end is required")
+	}
+
+	// Parse times
+	proposedStart, err := time.Parse(time.RFC3339, proposedStartStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid proposed_start format: %v", err)
+	}
+
+	proposedEnd, err := time.Parse(time.RFC3339, proposedEndStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid proposed_end format: %v", err)
+	}
+
+	// Validate time range
+	if proposedEnd.Before(proposedStart) || proposedEnd.Equal(proposedStart) {
+		return nil, fmt.Errorf("proposed_end must be after proposed_start")
+	}
+
+	// Build parameters
+	params := DetectOverlapsParams{
+		CalendarID:       getStringOrDefault(arguments, "calendar_id", "primary"),
+		ProposedStart:    proposedStart,
+		ProposedEnd:      proposedEnd,
+		TimeZone:         getStringOrDefault(arguments, "timezone", "UTC"),
+		ExcludeEventID:   getStringOrDefault(arguments, "exclude_event_id", ""),
+		IncludeDeclined:  getBoolOrDefault(arguments, "include_declined", false),
+		IncludeAllDay:    getBoolOrDefault(arguments, "include_all_day", false),
+		IncludeTentative: getBoolOrDefault(arguments, "include_tentative", true),
+	}
+
+	// Detect overlaps
+	result, err := ct.client.DetectOverlaps(params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to detect overlaps: %v", err)
+	}
+
+	// Format the result
+	formattedResult := ct.formatOverlapResult(result)
+
+	return &mcp.CallToolResult{
+		Content: []mcp.ToolResult{{
+			Type: "text",
+			Text: formattedResult,
+		}},
+	}, nil
+}
+
+func (ct *CalendarTools) formatOverlapResult(result *OverlapResult) string {
+	var output strings.Builder
+
+	// Header with proposed time info
+	output.WriteString(fmt.Sprintf("🔍 Overlap Detection for %s - %s (%d minutes)\n\n",
+		result.ProposedStart.Format("2006-01-02 15:04 MST"),
+		result.ProposedEnd.Format("15:04 MST"),
+		result.ProposedDuration))
+
+	if !result.HasOverlaps {
+		output.WriteString("✅ **No conflicts found!** This time slot is available.\n")
+		return output.String()
+	}
+
+	// Summary
+	output.WriteString(fmt.Sprintf("⚠️ **%d conflict(s) detected:**\n\n", result.OverlapCount))
+
+	// List each conflict
+	for i, overlap := range result.Overlaps {
+		output.WriteString(fmt.Sprintf("### Conflict %d: %s\n", i+1, getEventTitle(overlap.Event)))
+
+		// Event time
+		eventStart, eventEnd, err := parseEventTimes(overlap.Event)
+		if err == nil {
+			if overlap.Event.Start.Date != "" {
+				// All-day event
+				output.WriteString("🗓️ **All-day event**\n")
+			} else {
+				// Regular event
+				output.WriteString(fmt.Sprintf("⏰ **Event Time:** %s - %s\n",
+					eventStart.Format("15:04"),
+					eventEnd.Format("15:04")))
+			}
+		}
+
+		// Overlap details
+		output.WriteString(fmt.Sprintf("🔄 **Overlap:** %s - %s (%d minutes)\n",
+			overlap.OverlapStart.Format("15:04"),
+			overlap.OverlapEnd.Format("15:04"),
+			overlap.OverlapMins))
+
+		output.WriteString(fmt.Sprintf("📊 **Conflict Type:** %s\n", overlap.ConflictType))
+
+		// Response status
+		if overlap.ResponseStatus != "" {
+			var statusIcon string
+			switch overlap.ResponseStatus {
+			case "accepted":
+				statusIcon = "✅"
+			case "declined":
+				statusIcon = "❌"
+			case "tentative":
+				statusIcon = "❓"
+			case "needsAction":
+				statusIcon = "⏳"
+			default:
+				statusIcon = "❔"
+			}
+			output.WriteString(fmt.Sprintf("%s **Your Response:** %s\n", statusIcon, overlap.ResponseStatus))
+		}
+
+		// Event location
+		if overlap.Event.Location != "" {
+			output.WriteString(fmt.Sprintf("📍 **Location:** %s\n", overlap.Event.Location))
+		}
+
+		// Attendees count
+		if len(overlap.Event.Attendees) > 0 {
+			output.WriteString(fmt.Sprintf("👥 **Attendees:** %d people\n", len(overlap.Event.Attendees)))
+		}
+
+		// Meeting link
+		if overlap.Event.ConferenceData != nil && len(overlap.Event.ConferenceData.EntryPoints) > 0 {
+			for _, entry := range overlap.Event.ConferenceData.EntryPoints {
+				if entry.EntryPointType == "video" {
+					output.WriteString("📞 **Has Meeting Link**\n")
+					break
+				}
+			}
+		}
+
+		// Event ID for reference
+		output.WriteString(fmt.Sprintf("🆔 **Event ID:** %s\n", overlap.Event.Id))
+
+		if i < len(result.Overlaps)-1 {
+			output.WriteString("\n")
+		}
+	}
+
+	// Summary recommendation
+	output.WriteString(fmt.Sprintf("\n💡 **Recommendation:** Consider choosing a different time slot or declining conflicting events if needed.\n"))
+
+	return output.String()
+}
+
+func getEventTitle(event *calendar.Event) string {
+	if event.Summary != "" {
+		return event.Summary
+	}
+	return "(No Title)"
 }

@@ -45,7 +45,7 @@ func main() {
 
 	// Log server startup to stderr
 	server.LogToStderr("Google Calendar MCP Server starting...")
-	server.LogToStderr("Available tools: create_event, edit_event, delete_event, search_attendees, get_attendee_freebusy, list_events")
+	server.LogToStderr("Available tools: create_event, edit_event, delete_event, search_attendees, get_attendee_freebusy, list_events, detect_overlaps")
 
 	// Run the server
 	if err := server.Run(); err != nil {

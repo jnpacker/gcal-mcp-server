@@ -151,8 +151,41 @@ type ListEventsParams struct {
 	TimeZone     string    `json:"timezone,omitempty"`
 	MaxResults   int64     `json:"max_results,omitempty"`
 	ShowDeleted  bool      `json:"show_deleted,omitempty"`
+	ShowDeclined bool      `json:"show_declined,omitempty"`
 	SingleEvents bool      `json:"single_events,omitempty"`
 	OrderBy      string    `json:"order_by,omitempty"`
+}
+
+// DetectOverlapsParams represents parameters for overlap detection
+type DetectOverlapsParams struct {
+	CalendarID       string    `json:"calendar_id"`
+	ProposedStart    time.Time `json:"proposed_start"`
+	ProposedEnd      time.Time `json:"proposed_end"`
+	TimeZone         string    `json:"timezone,omitempty"`
+	ExcludeEventID   string    `json:"exclude_event_id,omitempty"`   // Exclude a specific event (for rescheduling)
+	IncludeDeclined  bool      `json:"include_declined,omitempty"`   // Whether to consider declined events as conflicts
+	IncludeAllDay    bool      `json:"include_all_day,omitempty"`    // Whether to consider all-day events as conflicts
+	IncludeTentative bool      `json:"include_tentative,omitempty"`  // Whether to consider tentative events as conflicts
+}
+
+// EventOverlap represents an overlapping event with conflict details
+type EventOverlap struct {
+	Event         *calendar.Event `json:"event"`
+	OverlapStart  time.Time       `json:"overlap_start"`
+	OverlapEnd    time.Time       `json:"overlap_end"`
+	OverlapMins   int             `json:"overlap_minutes"`
+	ConflictType  string          `json:"conflict_type"` // "full", "partial", "adjacent"
+	ResponseStatus string         `json:"response_status,omitempty"` // User's response to this conflicting event
+}
+
+// OverlapResult represents the result of overlap detection
+type OverlapResult struct {
+	HasOverlaps      bool           `json:"has_overlaps"`
+	OverlapCount     int            `json:"overlap_count"`
+	Overlaps         []EventOverlap `json:"overlaps"`
+	ProposedStart    time.Time      `json:"proposed_start"`
+	ProposedEnd      time.Time      `json:"proposed_end"`
+	ProposedDuration int            `json:"proposed_duration_minutes"`
 }
 
 func (c *Client) CreateEvent(params EventParams) (*calendar.Event, error) {
@@ -677,7 +710,17 @@ func (c *Client) ListEvents(params ListEventsParams) (*calendar.Events, error) {
 		call = call.OrderBy("startTime") // Default ordering
 	}
 
-	return call.Do()
+	events, err := call.Do()
+	if err != nil {
+		return nil, err
+	}
+
+	// Apply declined events filtering if needed
+	if !params.ShowDeclined {
+		events = c.filterDeclinedEvents(events)
+	}
+
+	return events, nil
 }
 
 func calculateTimeRange(timeFilter string, customMin, customMax time.Time, timezone string) (time.Time, time.Time) {
@@ -760,4 +803,229 @@ func (c *Client) getUserEmail() (string, error) {
 // GetCalendarColors gets the color definitions for calendars and events
 func (c *Client) GetCalendarColors() (*calendar.Colors, error) {
 	return c.service.Colors.Get().Do()
+}
+
+// DetectOverlaps detects overlapping events for a proposed time range
+func (c *Client) DetectOverlaps(params DetectOverlapsParams) (*OverlapResult, error) {
+	if params.CalendarID == "" {
+		params.CalendarID = "primary"
+	}
+
+	if params.TimeZone == "" {
+		params.TimeZone = "UTC"
+	}
+
+	// Calculate the time window to search for overlapping events
+	// Expand the search window slightly to catch adjacent events
+	searchStart := params.ProposedStart.Add(-1 * time.Hour)
+	searchEnd := params.ProposedEnd.Add(1 * time.Hour)
+
+	// List events in the expanded time range
+	listParams := ListEventsParams{
+		CalendarID:   params.CalendarID,
+		TimeFilter:   "custom",
+		TimeMin:      searchStart,
+		TimeMax:      searchEnd,
+		TimeZone:     params.TimeZone,
+		MaxResults:   250,
+		ShowDeleted:  false,
+		SingleEvents: true,
+		OrderBy:      "startTime",
+	}
+
+	events, err := c.ListEvents(listParams)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list events for overlap detection: %v", err)
+	}
+
+	// Get user's email to determine their response status in events
+	userEmail, err := c.getUserEmail()
+	if err != nil {
+		// If we can't get user email, continue without response status filtering
+		userEmail = ""
+	}
+
+	result := &OverlapResult{
+		HasOverlaps:      false,
+		OverlapCount:     0,
+		Overlaps:         []EventOverlap{},
+		ProposedStart:    params.ProposedStart,
+		ProposedEnd:      params.ProposedEnd,
+		ProposedDuration: int(params.ProposedEnd.Sub(params.ProposedStart).Minutes()),
+	}
+
+	for _, event := range events.Items {
+		// Skip if this is the event being excluded (e.g., when rescheduling)
+		if params.ExcludeEventID != "" && event.Id == params.ExcludeEventID {
+			continue
+		}
+
+		// Parse event times
+		eventStart, eventEnd, err := parseEventTimes(event)
+		if err != nil {
+			continue // Skip events with unparseable times
+		}
+
+		// Check for overlap using the standard overlap formula
+		// Overlap exists if: eventStart < proposedEnd AND eventEnd > proposedStart
+		if eventStart.Before(params.ProposedEnd) && eventEnd.After(params.ProposedStart) {
+			// Get user's response status for this event
+			responseStatus := getUserResponseStatus(event, userEmail)
+
+			// Apply filtering based on parameters
+			if !params.IncludeDeclined && responseStatus == "declined" {
+				continue
+			}
+
+			if !params.IncludeTentative && responseStatus == "tentative" {
+				continue
+			}
+
+			// Check if it's an all-day event
+			isAllDay := event.Start.Date != ""
+			if !params.IncludeAllDay && isAllDay {
+				continue
+			}
+
+			// Calculate overlap details
+			overlapStart := maxTime(params.ProposedStart, eventStart)
+			overlapEnd := minTime(params.ProposedEnd, eventEnd)
+			overlapDuration := overlapEnd.Sub(overlapStart)
+
+			// Determine conflict type
+			conflictType := "partial"
+			if eventStart.Equal(params.ProposedStart) && eventEnd.Equal(params.ProposedEnd) {
+				conflictType = "full"
+			} else if (eventStart.Before(params.ProposedStart) || eventStart.Equal(params.ProposedStart)) &&
+				(eventEnd.After(params.ProposedEnd) || eventEnd.Equal(params.ProposedEnd)) {
+				conflictType = "full" // Event completely contains proposed time
+			} else if (params.ProposedStart.Before(eventStart) || params.ProposedStart.Equal(eventStart)) &&
+				(params.ProposedEnd.After(eventEnd) || params.ProposedEnd.Equal(eventEnd)) {
+				conflictType = "full" // Proposed time completely contains event
+			}
+
+			overlap := EventOverlap{
+				Event:          event,
+				OverlapStart:   overlapStart,
+				OverlapEnd:     overlapEnd,
+				OverlapMins:    int(overlapDuration.Minutes()),
+				ConflictType:   conflictType,
+				ResponseStatus: responseStatus,
+			}
+
+			result.Overlaps = append(result.Overlaps, overlap)
+		}
+	}
+
+	result.OverlapCount = len(result.Overlaps)
+	result.HasOverlaps = result.OverlapCount > 0
+
+	return result, nil
+}
+
+// parseEventTimes extracts start and end times from a calendar event
+func parseEventTimes(event *calendar.Event) (time.Time, time.Time, error) {
+	var startTime, endTime time.Time
+	var err error
+
+	if event.Start.Date != "" {
+		// All-day event
+		startTime, err = time.Parse("2006-01-02", event.Start.Date)
+		if err != nil {
+			return startTime, endTime, fmt.Errorf("failed to parse start date: %v", err)
+		}
+		endTime, err = time.Parse("2006-01-02", event.End.Date)
+		if err != nil {
+			return startTime, endTime, fmt.Errorf("failed to parse end date: %v", err)
+		}
+	} else if event.Start.DateTime != "" {
+		// Regular event with time
+		startTime, err = time.Parse(time.RFC3339, event.Start.DateTime)
+		if err != nil {
+			return startTime, endTime, fmt.Errorf("failed to parse start datetime: %v", err)
+		}
+		endTime, err = time.Parse(time.RFC3339, event.End.DateTime)
+		if err != nil {
+			return startTime, endTime, fmt.Errorf("failed to parse end datetime: %v", err)
+		}
+	} else {
+		return startTime, endTime, fmt.Errorf("event has no start time")
+	}
+
+	return startTime, endTime, nil
+}
+
+// getUserResponseStatus gets the user's response status for an event
+func getUserResponseStatus(event *calendar.Event, userEmail string) string {
+	if userEmail == "" || len(event.Attendees) == 0 {
+		return "needsAction" // Default when we can't determine status
+	}
+
+	for _, attendee := range event.Attendees {
+		if attendee.Email == userEmail {
+			if attendee.ResponseStatus == "" {
+				return "needsAction"
+			}
+			return attendee.ResponseStatus
+		}
+	}
+
+	// If user is not in attendee list but event exists in their calendar,
+	// they're likely the organizer or it's a solo event
+	return "accepted"
+}
+
+// Helper functions for time comparison
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
+}
+
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
+}
+
+// filterDeclinedEvents removes events that the user has declined
+func (c *Client) filterDeclinedEvents(events *calendar.Events) *calendar.Events {
+	// Get user's email to determine their response status
+	userEmail, err := c.getUserEmail()
+	if err != nil {
+		// If we can't get user email, return all events (can't filter)
+		return events
+	}
+
+	filteredItems := make([]*calendar.Event, 0)
+
+	for _, event := range events.Items {
+		// Check if user has declined this event
+		userResponseStatus := getUserResponseStatus(event, userEmail)
+
+		// Include the event if user hasn't declined it
+		if userResponseStatus != "declined" {
+			filteredItems = append(filteredItems, event)
+		}
+	}
+
+	// Return new Events object with filtered items
+	return &calendar.Events{
+		AccessRole:          events.AccessRole,
+		DefaultReminders:    events.DefaultReminders,
+		Description:         events.Description,
+		Etag:                events.Etag,
+		Items:               filteredItems,
+		Kind:                events.Kind,
+		NextPageToken:       events.NextPageToken,
+		NextSyncToken:       events.NextSyncToken,
+		Summary:             events.Summary,
+		TimeZone:            events.TimeZone,
+		Updated:             events.Updated,
+		ServerResponse:      events.ServerResponse,
+		ForceSendFields:     events.ForceSendFields,
+		NullFields:          events.NullFields,
+	}
 }
