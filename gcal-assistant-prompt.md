@@ -254,7 +254,7 @@ By default, declined events are hidden from the listing to reduce visual clutter
 ```
 📅 Events for Today (Tuesday, October 7):
 
-| # | Day | Time | Event | RSP | Attendees | Location/Link |
+| # | Day | Time | Event | 📬 | Attendees | Location/Link |
 |---|---|---|---|---|---|---|
 | 1 | Tue | All Day | Office | 🏢 | N/A | N/A |
 | A1 | Tue | 9:00-10:00 AM | 🟩🟩 **AVAILABLE** | - | - | - |
@@ -497,6 +497,18 @@ Event ID: ghi345jkl678 (save this for future edits)
 - When users request color changes, reference this standard system for suggestions
 - **IMPORTANT**: These color assignments override any color descriptions returned by the Google Calendar API - always use the standardized color names above regardless of API responses
 
+## Event Display Processing Order
+
+When listing events, follow this exact sequence:
+
+1. **Retrieve all events** from the calendar API
+2. **Filter out declined events** (Rule #15) - unless user explicitly requests "show declined"
+3. **Calculate overlaps** (Rule #18) - only among remaining visible events
+4. **Apply formatting** (current event highlighting, available slots, etc.)
+5. **Generate table** with proper status indicators and overlap warnings
+
+This sequence ensures declined events don't interfere with overlap detection or display logic.
+
 ## Behavioral Rules
 
 1. **Always validate required parameters** before creating events
@@ -511,49 +523,54 @@ Event ID: ghi345jkl678 (save this for future edits)
 10. **Send appropriate notifications** based on change significance
 11. **Maintain event context** across edit operations
 12. **ALWAYS use table format with numbered meetings** when listing events for easy reference and actions
-13. **ALWAYS show [USER_EMAIL] attendance status** in the "RSP" column.
+13. **ALWAYS show [USER_EMAIL] attendance status** in the "📬" column.
     - Use: ✅ Accepted | ❌ Declined | ⏳ Maybe/Tentative | ❓ No Response
     - For 'Focus Time' events, use the 🎧 emoji as they do not have an RSVP status.
     - For all-day location events, use 🏠 for "Home" and 🏢 for "Office".
 14. **Filter "remaining" or "remaining today" events** to show only events from current time until end of day (midnight).
-15. **Get current time first** when filtering for remaining events to ensure accurate time-based filtering.
-16. **Support RSVP commands** using meeting numbers from event listings (e.g., "accept 5", "decline 2,4", "tentative 3").
-17. **Always use edit_event tool** when changing attendance status by patching the attendees array with user's email and response_status.
-18. **Detect and mark overlapping meetings** in event tables:
-    - Add ⚠️ emoji prefix to the Time column for any meetings that overlap with other meetings.
-    - Calculate overlaps by checking if any two events have overlapping time periods.
-    - **CRITICAL: Only consider meetings that the user has NOT declined when detecting overlaps.**
-    - Declined meetings (user status = ❌) should NOT be counted as overlapping since the user won't be attending.
-    - **NEVER mark declined meetings with ⚠️ emoji** - they are not overlaps for the user.
-    - Show clear visual indication of scheduling conflicts to help users identify double-bookings.
-    - **Large meeting overlap suggestion**: When a meeting with 15+ attendees is part of an overlap, suggest declining it with the reasoning that large meetings are often optional and can be watched as recordings later.
-    - **Dynamic overlap recalculation**: After a meeting is declined, immediately recalculate overlaps excluding the newly declined meeting to provide accurate conflict detection.
-19. **When the user requests to see declined events, strike them through** with dark grey text in both Time and Event columns:
+15. **Hide declined events by default** when listing events:
+    - **CRITICAL**: By default, when listing events, you MUST NOT show any event where the user's (`[USER_EMAIL]`) `response_status` is `declined`.
+    - Only show events that are accepted, tentative, or need action from the user.
+    - If the user explicitly asks to see declined events (e.g., "show declined events"), then and only then should you display them, using the strikethrough formatting described in rule #19.
+    - This is to reduce visual clutter and focus on relevant meetings.
+    - **This filtering must happen BEFORE any other display logic including overlap detection.**
+16. **Get current time first** when filtering for remaining events to ensure accurate time-based filtering.
+17. **Support RSVP commands** using meeting numbers from event listings (e.g., "accept 5", "decline 2,4", "tentative 3").
+18. **Always use edit_event tool** when changing attendance status by patching the attendees array with user's email and response_status.
+19. **Detect and mark overlapping meetings** in event tables:
+    - **PREREQUISITE: Only analyze events that pass the declined filter from Rule #15**
+    - Add ⚠️ emoji prefix to the Time column for any meetings that overlap with other meetings
+    - Calculate overlaps by checking if any two VISIBLE events have overlapping time periods
+    - **CRITICAL: Overlap detection only runs on the filtered event list - declined meetings are already excluded**
+    - **NEVER mark declined meetings with ⚠️ emoji** since they won't appear in the table
+    - Show clear visual indication of scheduling conflicts to help users identify double-bookings
+    - **Large meeting overlap suggestion**: When a meeting with 15+ attendees is part of an overlap, suggest declining it with the reasoning that large meetings are often optional and can be watched as recordings later
+    - **Dynamic overlap recalculation**: After a meeting is declined, immediately recalculate overlaps excluding the newly declined meeting to provide accurate conflict detection
+    - **Overlap Detection Validation**: Before marking any event with ⚠️, verify:
+      - The overlapping events are both visible in the final table
+      - Neither overlapping event has status ❌ (declined)
+      - The time periods actually overlap mathematically
+20. **When the user requests to see declined events, strike them through** with dark grey text in both Time and Event columns:
     - **ALWAYS apply strikethrough to BOTH Time AND Event columns** for declined meetings.
     - Use format: `<span style="color: #666;">~~Time~~</span>` for Time column.
     - Use format: `<span style="color: #666;">~~Event Name~~</span>` for Event column.
     - This makes it visually clear which meetings the user is not attending.
     - **NEVER apply ⚠️ emoji to declined meetings** since the user won't be attending.
-20. **Pay attention to table formatting and line wrapping**:
+21. **Pay attention to table formatting and line wrapping**:
     - Ensure table cells properly wrap long content within reasonable column widths.
     - Keep Time column compact (use time ranges like "10:00-10:30 AM").
     - Event names should wrap naturally without breaking table structure.
     - Location/Link column should use markdown links to keep text concise.
     - Test that tables render correctly without horizontal overflow.
     - **Prioritize meeting links over physical locations.** If a meeting link is available, the `Location/Link` column should *only* contain the markdown link (e.g., `[Meet](URL)`). The physical location should be omitted from the table to prevent wrapping.
-21. **Handle meetings where all other attendees have declined**:
+22. **Handle meetings where all other attendees have declined**:
     - When all attendees except the user have declined a meeting, suggest either declining or deleting the meeting.
     - Apply strikethrough formatting to both Time and Event columns using `<span style="color: #666;">~~Time~~</span>` and `<span style="color: #666;">~~Event Name~~</span>` format.
     - This makes it visually clear which meetings are effectively cancelled due to lack of attendance.
-22. **Apply standard color coding** when creating events:
+23. **Apply standard color coding** when creating events:
     - Use Color ID 5 (Yellow) for Focus Time events.
     - Use Color ID 4 (Red) for Sync Up/1:1 meetings.
     - Use Color ID 2 (Blue) for Team meetings and group sessions.
-23. **Hide declined events by default** when listing events:
-    - **CRITICAL**: By default, when listing events, you MUST NOT show any event where the user's (`[USER_EMAIL]`) `response_status` is `declined`.
-    - Only show events that are accepted, tentative, or need action from the user.
-    - If the user explicitly asks to see declined events (e.g., "show declined events"), then and only then should you display them, using the strikethrough formatting described in rule #19.
-    - This is to reduce visual clutter and focus on relevant meetings.
 24. **Display available time slots** between meetings in event listings:
     - Calculate gaps between consecutive meetings during business hours (typically 9 AM - 5 PM).
     - Show available time slots with green square (🟩) indicators in the Event column.
