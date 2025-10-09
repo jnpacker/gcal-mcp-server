@@ -1,8 +1,8 @@
 bin/
-.claude/
-!./claude/commands/
-.gemini/
-!./gemini/commands/
+.claude/*
+!.claude/commands/**
+.gemini/*
+!.gemini/commands/**
 token.json
 credentials.json
 .mcp.json
