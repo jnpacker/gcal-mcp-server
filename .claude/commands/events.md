@@ -1,0 +1,63 @@
+---
+argument-hint: Day reference, like today, tomorrow, yesterday, next Tuesday
+description: Lists Google Calendar events
+allowed-tools: [list_events, create_event, edit_event, delete_event]
+---
+List events for the requested day in a compact markdown table with precise formatting and smart annotations.
+
+Requirements:
+- Use the list_events tool to retrieve events. Declined events are excluded by default; if the user asks to see declined, include them and apply strikethrough formatting.
+- Each event in (list_events) includes a **Has Overlap:** field, add the ⚠️ prefix to the Time cell for each conflicting event whether declined or not.
+- Number events sequentially in the first column (#). Add an arrow (➤) in the # column for the event currently in progress. Append ⏰ after the event name for the current event.
+- Columns: # | Day | Time | Event | 📬 | Attendees | Link
+- Status emoji in 📬 column: ✅ accepted | ⏳ maybe/tentative | ❓ no response | 🎧 for focus time. For working location, show 🏠 (Home) or 🏢 (Office) in the 📬 column.
+- Attendees column: Show attendee count (e.g., "5 attendees"). When all attendees except you have declined, append ❌ to the count (e.g., "2 attendees ❌").
+- Link column: always include the meeting link when available; do not include physical locations here. If a meeting link exists, show only a markdown link like [Meet](URL).
+- Show available time slots between meetings as separate rows outside the main table, enumerated A1, A2, etc. Use 🟩 blocks where each 🟩 equals 30 minutes.
+- Business hours: 9:00 AM – 5:00 PM for available slot calculations. Only list slots of 30 minutes or longer.
+- When showing declined events (if requested), strike through BOTH Time and Event using: <span style="color: #666;">~~Time~~</span> and <span style="color: #666;">~~Event Name~~</span>. Never add ⚠️ to declined meetings.
+- Include a footer with total events, available slot count, and current time when feasible.
+- Use the system `date` command to extract the current date/time for headers and any time-based filtering.
+- After the table, include a Conflicts section summarizing overlaps found by reviewing the events **Has Overlap:** value. Reference events by their row numbers and show the overlapping time window when available. If no conflicts, state: "Conflicts: None".
+- **Smart Meeting Suggestions**: When displaying events, analyze attendee responses and provide actionable suggestions:
+  - For meetings with 1-2 total attendees where all other attendees have declined (❌), suggest either declining the meeting or deleting the event
+  - For meetings with 3+ attendees where >75% have declined, suggest reaching out to the organizer about rescheduling
+  - Include these suggestions in a "Suggestions" section after the Conflicts section
+
+Example output:
+
+```
+📅 Events for Today (DAY, MONTH DAY_NUMBER):
+
+| # | Day | Time | Event | 📬 | Attendees | Link |
+|---|---|---|---|---|---|---|
+| 1 | Tue | All Day | Office | 🏢 | N/A | N/A |
+| A1 | Tue | 9:00-10:00 AM | 🟩🟩 **AVAILABLE** | - | - | - |
+| 2 | Tue | 10:00-10:30 AM | Team Sync | ✅ | 5 attendees | [Meet](https://meet.google.com/[ID]) |
+| 3 | Tue | 10:30-11:30 AM | Project Planning | ✅ | 3 attendees | [Meet](https://meet.google.com/[ID]) |
+| A2 | Tue | 11:30 AM-1:00 PM | 🟩🟩🟩 **AVAILABLE** | - | - | - |
+| ➤ 4 | Tue | 1:00-3:30 PM | Focus Time: Code Review ⏰ | 🎧 | N/A | N/A |
+| 5 | Tue | ⚠️ 3:00-4:00 PM | 1:1 with Manager | ✅ | 1 attendee ❌ | [Meet](https://meet.google.com/[ID]) |
+| A3 | Tue | 4:00-5:00 PM | 🟩🟩 **AVAILABLE** | - | - | - |
+
+📊 Total: 5 events | 3 available time slots | Current time: 1:15 PM ⏰
+Status: ✅ Accepted | ⏳ Maybe/Tentative | ❓ No Response
+
+Available Time Slots:
+- A1: 9:00-10:00 AM (🟩🟩)
+- A2: 11:30 AM-1:00 PM (🟩🟩🟩)
+- A3: 4:00-5:00 PM (🟩🟩)
+
+Conflicts:
+- (4) Focus Time: Code Review overlaps with (5) 1:1 with Manager (3:00-3:30 PM)
+
+Suggestions:
+- (2) Team Sync: Consider declining or deleting - only 1 other attendee and they declined
+- (5) 1:1 with Manager: 75% of attendees declined, consider reaching out to reschedule
+
+Use meeting numbers for actions: "reschedule meeting 4" or "delete meeting 2".
+Use available slot numbers for scheduling: "schedule in A1" or "book A3".
+
+Note: Declined events hidden by default. Use "show declined" to view all events.
+```
+
