@@ -144,15 +144,23 @@ type FreeBusyParams struct {
 }
 
 type ListEventsParams struct {
-	CalendarID   string    `json:"calendar_id"`
-	TimeFilter   string    `json:"time_filter"` // "today", "this_week", "next_week", "custom"
-	TimeMin      time.Time `json:"time_min,omitempty"`
-	TimeMax      time.Time `json:"time_max,omitempty"`
-	TimeZone     string    `json:"timezone,omitempty"`
-	MaxResults   int64     `json:"max_results,omitempty"`
-	ShowDeleted  bool      `json:"show_deleted,omitempty"`
-	SingleEvents bool      `json:"single_events,omitempty"`
-	OrderBy      string    `json:"order_by,omitempty"`
+	CalendarID      string    `json:"calendar_id"`
+	TimeFilter      string    `json:"time_filter"` // "today", "this_week", "next_week", "custom"
+	TimeMin         time.Time `json:"time_min,omitempty"`
+	TimeMax         time.Time `json:"time_max,omitempty"`
+	TimeZone        string    `json:"timezone,omitempty"`
+	MaxResults      int64     `json:"max_results,omitempty"`
+	ShowDeleted     bool      `json:"show_deleted,omitempty"`
+	SingleEvents    bool      `json:"single_events,omitempty"`
+	OrderBy         string    `json:"order_by,omitempty"`
+	ShowDeclined    bool      `json:"show_declined,omitempty"`    // Include declined events in overlap detection
+	DetectOverlaps  bool      `json:"detect_overlaps,omitempty"`  // Enable overlap detection
+}
+
+// EventWithOverlap wraps a calendar.Event with overlap detection information
+type EventWithOverlap struct {
+	*calendar.Event
+	HasOverlap bool `json:"has_overlap"`
 }
 
 func (c *Client) CreateEvent(params EventParams) (*calendar.Event, error) {
@@ -677,7 +685,23 @@ func (c *Client) ListEvents(params ListEventsParams) (*calendar.Events, error) {
 		call = call.OrderBy("startTime") // Default ordering
 	}
 
-	return call.Do()
+	events, err := call.Do()
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter out declined events if ShowDeclined is false
+	if !params.ShowDeclined && events.Items != nil {
+		filteredItems := make([]*calendar.Event, 0, len(events.Items))
+		for _, event := range events.Items {
+			if !c.isEventDeclined(event) {
+				filteredItems = append(filteredItems, event)
+			}
+		}
+		events.Items = filteredItems
+	}
+
+	return events, nil
 }
 
 func calculateTimeRange(timeFilter string, customMin, customMax time.Time, timezone string) (time.Time, time.Time) {
@@ -760,4 +784,138 @@ func (c *Client) getUserEmail() (string, error) {
 // GetCalendarColors gets the color definitions for calendars and events
 func (c *Client) GetCalendarColors() (*calendar.Colors, error) {
 	return c.service.Colors.Get().Do()
+}
+
+// DetectOverlaps analyzes events for time overlaps and returns a map of event IDs to overlap status
+func (c *Client) DetectOverlaps(events []*calendar.Event, showDeclined bool) map[string]bool {
+	overlaps := make(map[string]bool)
+
+	// First, filter events based on showDeclined parameter and extract time information
+	type eventTime struct {
+		id        string
+		start     time.Time
+		end       time.Time
+		declined  bool
+		allDay    bool
+	}
+
+	var eventTimes []eventTime
+
+	for _, event := range events {
+		// Check if this event should be included in overlap detection
+		declined := c.isEventDeclined(event)
+		if !showDeclined && declined {
+			continue
+		}
+
+		// Extract start and end times
+		start, end, allDay, err := parseEventTimes(event)
+		if err != nil {
+			continue // Skip events with invalid times
+		}
+
+		eventTimes = append(eventTimes, eventTime{
+			id:       event.Id,
+			start:    start,
+			end:      end,
+			declined: declined,
+			allDay:   allDay,
+		})
+
+		// Initialize overlap status to false
+		overlaps[event.Id] = false
+	}
+
+	// Check for overlaps between events
+	for i := 0; i < len(eventTimes); i++ {
+		for j := i + 1; j < len(eventTimes); j++ {
+			event1 := eventTimes[i]
+			event2 := eventTimes[j]
+
+			// Skip all-day events as they typically don't conflict with timed events
+			if event1.allDay || event2.allDay {
+				continue
+			}
+
+			// Check if events overlap in time
+			if eventsOverlap(event1.start, event1.end, event2.start, event2.end) {
+				overlaps[event1.id] = true
+				overlaps[event2.id] = true
+			}
+		}
+	}
+
+	return overlaps
+}
+
+// isEventDeclined checks if the authenticated user has declined the event
+func (c *Client) isEventDeclined(event *calendar.Event) bool {
+	if event.Attendees == nil {
+		return false
+	}
+
+	// Get the authenticated user's email
+	userEmail, err := c.getUserEmail()
+	if err != nil {
+		// If we can't get user email, fall back to checking if any attendee declined
+		// This maintains backward compatibility but is less accurate
+		for _, attendee := range event.Attendees {
+			if attendee.ResponseStatus == "declined" {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Look for the user's specific response status
+	for _, attendee := range event.Attendees {
+		if attendee.Email == userEmail && attendee.ResponseStatus == "declined" {
+			return true
+		}
+	}
+	return false
+}
+
+// parseEventTimes extracts start and end times from a calendar event
+func parseEventTimes(event *calendar.Event) (time.Time, time.Time, bool, error) {
+	var start, end time.Time
+	var err error
+	var allDay bool
+
+	if event.Start == nil || event.End == nil {
+		return start, end, allDay, fmt.Errorf("event missing start or end time")
+	}
+
+	// Handle all-day events
+	if event.Start.Date != "" {
+		allDay = true
+		start, err = time.Parse("2006-01-02", event.Start.Date)
+		if err != nil {
+			return start, end, allDay, fmt.Errorf("invalid start date: %v", err)
+		}
+		end, err = time.Parse("2006-01-02", event.End.Date)
+		if err != nil {
+			return start, end, allDay, fmt.Errorf("invalid end date: %v", err)
+		}
+	} else if event.Start.DateTime != "" {
+		// Handle regular timed events
+		start, err = time.Parse(time.RFC3339, event.Start.DateTime)
+		if err != nil {
+			return start, end, allDay, fmt.Errorf("invalid start datetime: %v", err)
+		}
+		end, err = time.Parse(time.RFC3339, event.End.DateTime)
+		if err != nil {
+			return start, end, allDay, fmt.Errorf("invalid end datetime: %v", err)
+		}
+	} else {
+		return start, end, allDay, fmt.Errorf("event has no valid time information")
+	}
+
+	return start, end, allDay, nil
+}
+
+// eventsOverlap checks if two time ranges overlap
+func eventsOverlap(start1, end1, start2, end2 time.Time) bool {
+	// Events overlap if one starts before the other ends and vice versa
+	return start1.Before(end2) && start2.Before(end1)
 }

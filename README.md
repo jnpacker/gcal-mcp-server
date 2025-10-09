@@ -8,7 +8,7 @@ A comprehensive Model Context Protocol (MCP) server that provides intelligent Go
 - **Smart Day Organization**: Automatically reorganize your calendar for optimal productivity
 - **Timeline Visualization**: Gantt chart-style timeline view for better schedule visualization  
 - **Intelligent Conflict Detection**: Automatic overlap detection with visual indicators
-- **Enhanced AI Integration**: Comprehensive system prompts for Claude, Gemini-CLI, and Cursor
+- **Enhanced AI Integration**: Command-based integrations for Claude and Gemini (TODO: Cursor)
 - **Attendee Availability Validation**: Mandatory free/busy checking before event creation
 - **Meeting Filtering**: Smart filtering for "remaining today" events and time-based queries
 
@@ -132,13 +132,9 @@ This approach ensures consistent credential access regardless of launch location
 
 This MCP server is designed to work seamlessly with multiple AI assistants. Each platform has specific setup instructions and capabilities.
 
-### 📋 System Prompt Integration
+### 📋 AI Command Integrations
 
-The repository includes a comprehensive system prompt (`gcal-assistant-prompt.md`) that provides:
-- Detailed behavioral guidelines for calendar management
-- Advanced workflow instructions for RSVP management and day organization
-- Response formatting templates for consistent user experience
-- Error handling and validation procedures
+This repository ships command definitions for multiple assistants instead of a single system prompt. Use the platform-specific command files to enable rich calendar workflows.
 
 ### 🔵 Claude Code Integration
 
@@ -160,38 +156,31 @@ Add the following to your Claude Code or Gemini CLI configuration file:
 }
 ```
 
-#### Using the System Prompt with Claude
+#### Using Claude Commands
 
-1. **Copy the system prompt**: Open `gcal-assistant-prompt.md` and copy the entire contents
-2. **Apply to Claude**: Paste the system prompt content into `CLAUDE.md`
-3. **Update user email**: Replace `[USER_EMAIL]` placeholders with your actual email address
-4. **Start using**: Claude will now follow the comprehensive calendar management guidelines
+1. Open Claude Desktop → Commands
+2. Create a new command and paste the contents of `.claude/commands/events.md`
+3. Optionally import additional commands from the `.claude/commands/` directory
+4. Customize placeholders (e.g., email) as needed
 
 See `CLAUDE.md` for detailed Claude-specific instructions and examples.
 
 ### 🟡 Gemini-CLI Integration
 
-#### Using the System Prompt with Gemini CLI
-1. **Copy the system prompt**: Open `gcal-assistant-prompt.md` and copy the entire contents
-2. **Apply to Claude**: Paste the system prompt content into `GEMINI.md`
-3. **Update user email**: Replace `[USER_EMAIL]` placeholders with your actual email address
-4. **Start using**: Claude will now follow the comprehensive calendar management guidelines
+#### Using Gemini Commands
+1. Use the provided TOML command set in `.gemini/commands/events.toml`
+2. Follow `GEMINI.md` for importing or referencing commands with your Gemini CLI setup
+3. Customize placeholders (e.g., email) as needed
 
 See `GEMINI.md` for detailed Gemini-CLI specific instructions and examples.
 
 ### 🟣 Cursor IDE Integration
 
-#### Configuration Steps
+#### Status
 
-1. **Open Cursor Settings**: Go to Settings → Rules
-2. **Create New Rule**: Click "Add Rule" 
-3. **Rule Configuration**:
-   - **Name**: "Google Calendar Assistant"
-   - **Description**: "Comprehensive Google Calendar management with MCP server integration"
-   - **Rule Type**: "System Prompt" or "Behavioral Rule"
-4. **Apply System Prompt**: Copy the entire contents of `gcal-assistant-prompt.md` into the rule text area
-5. **Customize**: Replace `[USER_EMAIL]` with your actual email address
-6. **Save and Activate**: Save the rule and ensure it's enabled
+- TODO: Provide Cursor command definitions analogous to Claude/Gemini.
+
+#### MCP Server Configuration in Cursor
 
 #### MCP Server Configuration in Cursor
 
@@ -443,9 +432,8 @@ gcal-mcp-server/
 │   ├── calendar/                 # Calendar API client and tools
 │   └── mcp/                      # MCP protocol implementation
 ├── bin/                          # Compiled binaries
-├── gcal-assistant-prompt.md      # Comprehensive system prompt for AI assistants
-├── CLAUDE.md                     # Claude Desktop integration guide
-├── GEMINI.md                     # Gemini-CLI integration guide
+├── .claude/commands/             # Claude command definitions (e.g., events.md)
+├── .gemini/commands/             # Gemini command definitions (e.g., events.toml)
 ├── README.md                     # Main documentation (this file)
 ├── Makefile                      # Build automation
 ├── go.mod                        # Go module dependencies
@@ -455,9 +443,10 @@ gcal-mcp-server/
 
 ### Key Files
 
-- **`gcal-assistant-prompt.md`**: The comprehensive system prompt containing all behavioral guidelines, workflow instructions, and response templates for AI assistants
-- **`CLAUDE.md`**: Specific instructions for integrating with Claude Desktop, including configuration and usage examples
-- **`GEMINI.md`**: Complete guide for using the MCP server with Google's Gemini-CLI tool
+- **`.claude/commands/events.md`**: Claude commands for calendar operations
+- **`.gemini/commands/events.toml`**: Gemini CLI commands for calendar operations
+- **`CLAUDE.md`**: Claude Desktop integration guide
+- **`GEMINI.md`**: Gemini-CLI integration guide
 - **`README.md`**: This file - comprehensive documentation covering installation, configuration, and usage
 - **`Makefile`**: Build automation for easy compilation and deployment
 
@@ -580,22 +569,10 @@ The Google Calendar MCP Server includes sophisticated AI-driven features that en
 - **Notification Management**: Intelligent notification sending based on change significance
 - **Error Recovery**: Graceful handling of scheduling conflicts with alternative suggestions
 
-## 📋 System Prompt Integration
+## 📋 AI Commands Overview
 
-The repository includes a comprehensive system prompt (`gcal-assistant-prompt.md`) that provides:
+Use the provided command files to enable rich calendar workflows without a monolithic system prompt:
 
-- **Behavioral Guidelines**: Detailed instructions for calendar management workflows
-- **Response Templates**: Consistent formatting for event listings, creation confirmations, and error messages
-- **Advanced Features**: RSVP management, day organization, and timeline visualization instructions
-- **Error Handling**: Comprehensive validation and recovery procedures
-
-### Using the System Prompt
-
-1. **For Claude Desktop**: Copy `gcal-assistant-prompt.md` content into your conversation
-2. **For Gemini-CLI**: Use `--system-prompt "$(cat gcal-assistant-prompt.md)"`
-3. **For Cursor**: Add the content as a behavioral rule in Settings → Rules
-4. **Customization**: Replace `[USER_EMAIL]` with your actual email address
-
-See the respective platform documentation:
-- [CLAUDE.md](CLAUDE.md) - Claude Desktop specific instructions
-- [GEMINI.md](GEMINI.md) - Gemini-CLI integration guide
+- Claude: see `.claude/commands/events.md` and `CLAUDE.md`
+- Gemini CLI: see `.gemini/commands/events.toml` and `GEMINI.md`
+- Cursor: TODO to provide command definitions; MCP server configuration is supported today

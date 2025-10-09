@@ -442,6 +442,16 @@ func (ct *CalendarTools) GetTools() []mcp.Tool {
 						"enum":        []string{"startTime", "updated"},
 						"default":     "startTime",
 					},
+					"show_declined": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Whether to include events that you have declined (defaults to false)",
+						"default":     false,
+					},
+					"detect_overlaps": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Whether to detect and mark overlapping events with has_overlap field (defaults to true)",
+						"default":     true,
+					},
 				},
 				Required: []string{},
 			},
@@ -1020,13 +1030,15 @@ func getIntOrDefault(args map[string]interface{}, key string, defaultValue int) 
 
 func (ct *CalendarTools) handleListEvents(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
 	params := ListEventsParams{
-		CalendarID:   getStringOrDefault(arguments, "calendar_id", "primary"),
-		TimeFilter:   getStringOrDefault(arguments, "time_filter", "today"),
-		TimeZone:     getStringOrDefault(arguments, "timezone", "UTC"),
-		MaxResults:   int64(getIntOrDefault(arguments, "max_results", 250)),
-		ShowDeleted:  getBoolOrDefault(arguments, "show_deleted", false),
-		SingleEvents: true,
-		OrderBy:      getStringOrDefault(arguments, "order_by", "startTime"),
+		CalendarID:     getStringOrDefault(arguments, "calendar_id", "primary"),
+		TimeFilter:     getStringOrDefault(arguments, "time_filter", "today"),
+		TimeZone:       getStringOrDefault(arguments, "timezone", "UTC"),
+		MaxResults:     int64(getIntOrDefault(arguments, "max_results", 250)),
+		ShowDeleted:    getBoolOrDefault(arguments, "show_deleted", false),
+		SingleEvents:   true,
+		OrderBy:        getStringOrDefault(arguments, "order_by", "startTime"),
+		ShowDeclined:   getBoolOrDefault(arguments, "show_declined", false),
+		DetectOverlaps: getBoolOrDefault(arguments, "detect_overlaps", true),
 	}
 
 	// Parse custom time range if provided
@@ -1094,6 +1106,12 @@ func (ct *CalendarTools) formatEventsResult(events *calendar.Events, params List
 		return result.String()
 	}
 
+	// Detect overlaps if requested
+	var overlaps map[string]bool
+	if params.DetectOverlaps {
+		overlaps = ct.client.DetectOverlaps(events.Items, params.ShowDeclined)
+	}
+
 	// Group events by date
 	eventsByDate := make(map[string][]*calendar.Event)
 	for _, event := range events.Items {
@@ -1144,7 +1162,11 @@ func (ct *CalendarTools) formatEventsResult(events *calendar.Events, params List
 		}
 
 		for _, event := range eventsByDate[date] {
-			ct.formatSingleEvent(&result, event)
+			hasOverlap := false
+			if overlaps != nil {
+				hasOverlap = overlaps[event.Id]
+			}
+			ct.formatSingleEvent(&result, event, hasOverlap)
 		}
 	}
 
@@ -1153,7 +1175,7 @@ func (ct *CalendarTools) formatEventsResult(events *calendar.Events, params List
 	return result.String()
 }
 
-func (ct *CalendarTools) formatSingleEvent(result *strings.Builder, event *calendar.Event) {
+func (ct *CalendarTools) formatSingleEvent(result *strings.Builder, event *calendar.Event, hasOverlap bool) {
 	// Event title
 	title := event.Summary
 	if title == "" {
@@ -1305,6 +1327,13 @@ func (ct *CalendarTools) formatSingleEvent(result *strings.Builder, event *calen
 
 	// Event ID for reference
 	result.WriteString(fmt.Sprintf("🆔 **Event ID:** %s\n", event.Id))
+
+	// Overlap status
+	overlapIcon := "✅"
+	if hasOverlap {
+		overlapIcon = "⚠️"
+	}
+	result.WriteString(fmt.Sprintf("%s **Has Overlap:** %t\n", overlapIcon, hasOverlap))
 
 	result.WriteString("\n")
 }

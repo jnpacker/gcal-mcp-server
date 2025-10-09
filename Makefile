@@ -31,8 +31,4 @@ deps: mod-tidy
 
 dev: fmt vet test build
 
-prompt:
-	cp gcal-assistant-prompt.md CLAUDE.md
-	cp gcal-assistant-prompt.md GEMINI.md
-
 .DEFAULT_GOAL := build
