@@ -1233,9 +1233,9 @@ func (ct *CalendarTools) formatSingleEvent(result *strings.Builder, event *calen
 			case "declined":
 				statusIcon = " ❌"
 			case "tentative":
-				statusIcon = " ❓"
-			case "needsAction":
 				statusIcon = " ⏳"
+			case "needsAction":
+				statusIcon = " ❓"
 			default:
 				statusIcon = ""
 			}
