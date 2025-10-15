@@ -13,8 +13,6 @@ Requirements:
 - Link column: always include the meeting link when available; do not include physical locations here. If a meeting link exists, show only a markdown link like [Meet](URL).
 - Show available time slots between meetings as separate rows outside the main table, enumerated A1, A2, etc. Use 🟩 blocks where each 🟩 equals 30 minutes.
 - Business hours: 9:00 AM – 5:00 PM for available slot calculations. Only list slots of 30 minutes or longer.
-- When showing declined events (if requested), strike through BOTH Time and Event using: <span style="color: #666;">~~Time~~</span> and <span style="color: #666;">~~Event Name~~</span>. Never add ⚠️ to declined meetings.
-- Include a footer with total events, available slot count, and current time when feasible.
 - Use the system `date` command to extract the current date/time for headers and any time-based filtering.
 - After the table, include a Conflicts section summarizing overlaps found by reviewing the events **Has Overlap:** value. Reference events by their row numbers and show the overlapping time window when available. If no conflicts, state: "Conflicts: None".
 - **Smart Meeting Suggestions**: When displaying events, analyze attendee responses and provide actionable suggestions:
@@ -24,7 +22,6 @@ Requirements:
 
 Example output:
 
-```
 📅 Events for Today (DAY, MONTH DAY_NUMBER):
 
 | # | Day | Time | Event | 📬 | Attendees | Link |
@@ -41,22 +38,11 @@ Example output:
 📊 Total: 5 events | 3 available time slots | Current time: 1:15 PM ⏰
 Status: ✅ Accepted | ⏳ Maybe/Tentative | ❓ No Response
 
-Available Time Slots:
-- A1: 9:00-10:00 AM (🟩🟩)
-- A2: 11:30 AM-1:00 PM (🟩🟩🟩)
-- A3: 4:00-5:00 PM (🟩🟩)
-
 Conflicts:
 - (4) Focus Time: Code Review overlaps with (5) 1:1 with Manager (3:00-3:30 PM)
 
 Suggestions:
 - (2) Team Sync: Consider declining or deleting - only 1 other attendee and they declined
 - (5) 1:1 with Manager: 75% of attendees declined, consider reaching out to reschedule
-
-Use meeting numbers for actions: "reschedule meeting 4" or "delete meeting 2".
-Use available slot numbers for scheduling: "schedule in A1" or "book A3".
-
-Note: Declined events hidden by default. Use "show declined" to view all events.
-```
 
 """

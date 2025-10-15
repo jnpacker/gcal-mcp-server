@@ -1,0 +1,56 @@
+# Configuration for syncing command prompt files across providers
+# Each entry defines a command "core name" and the files that must stay in sync
+# along with provider-specific header/footers.
+
+commands:
+  - name: events
+    files:
+      claude:
+        path: .claude/commands/events.md
+        header: |
+          ---
+          argument-hint: Day reference, like today, tomorrow, yesterday, next Tuesday
+          description: Lists Google Calendar events
+          allowed-tools: [list_events, create_event, edit_event, delete_event]
+          ---
+        footer: ""
+      cursor:
+        path: .cursor/commands/events.md
+        header: ""
+        footer: ""
+      gemini:
+        path: .gemini/commands/events.toml
+        header: |
+          description = "List events, except those that are declined"
+          prompt = """
+        footer: '"""'
+  - name: focus
+    files:
+      claude:
+        path: .claude/commands/focus.md
+        header: |
+          ---
+          argument-hint: Write the summary for the focus event, usually Focus time or Focus on development
+          description: Creates a focus event
+          allowed-tools: [list_events, create_event, edit_event, delete_event]
+          ---
+        footer: ""
+      cursor:
+        path: .cursor/commands/focus.md
+        header: ""
+        footer: ""
+      gemini:
+        path: .gemini/commands/focus.toml
+        header: |
+          description = "Manage Focus time"
+          prompt = """
+        footer: '"""'
+
+# Behavior tuning
+# - primary_provider is the canonical source when a sync conflict occurs
+# - If omitted, the most recently modified of the three becomes primary
+primary_provider: auto
+
+# Notes:
+# - The script should always preserve existing indentation and whitespace.
+# - Gemini TOML prompts must end with a closing triple quote on the last line.
