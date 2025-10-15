@@ -1,8 +1,3 @@
----
-argument-hint: Day reference, like today, tomorrow, yesterday, next Tuesday
-description: Lists Google Calendar events
-allowed-tools: [list_events, create_event, edit_event, delete_event]
----
 
 List events for the requested day in a compact markdown table with precise formatting and smart annotations.
 
