@@ -4,5 +4,5 @@ description: Creates a focus event
 allowed-tools: [list_events, create_event, edit_event, delete_event]
 ---
 
-- Focus time entries: When creating new focus time events, always set colorId to "5" (yellow). When displaying focus time events that don't have color ID 5, automatically update them to use color ID "5".
+Fill any Available slots with focus time if if they are 30m or greater. When a focus time is between 30m - 60m title it 'Focus paperwork', if the focus time is 60m or greater, title it 'Focus development'
 

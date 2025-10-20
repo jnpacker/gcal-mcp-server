@@ -1,0 +1,7 @@
+---
+argument-hint: Draw a graphical representation of my meeting overlaps with additional details and suggestions
+description: Summarize accepted meeting overlaps
+allowed-tools: [list_events]
+---
+
+Draw out the meeting overlaps (horizontal timeline), since I agreed to attend all of them, and show how much time I will get to spend in each.Call out if I don't get to spend a reasonable amount of time, and try to suggest attendance that prioritizes the first 30min of each meeting

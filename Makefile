@@ -31,4 +31,7 @@ deps: mod-tidy
 
 dev: fmt vet test build
 
+sync-commands:
+	./scripts/sync-commands.sh
+
 .DEFAULT_GOAL := build

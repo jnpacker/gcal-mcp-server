@@ -45,6 +45,27 @@ commands:
           description = "Manage Focus time"
           prompt = """
         footer: '"""'
+  - name: overlap
+    files:
+      claude:
+        path: .claude/commands/overlap.md
+        header: |
+          ---
+          argument-hint: Draw a graphical representation of my meeting overlaps with additional details and suggestions
+          description: Summarize accepted meeting overlaps
+          allowed-tools: [list_events]
+          ---
+        footer: ""
+      cursor:
+        path: .cursor/commands/overlap.md
+        header: ""
+        footer: ""
+      gemini:
+        path: .gemini/commands/overlap.toml
+        header: |
+          description = "Summarize accepted meeting overlaps"
+          prompt = """
+        footer: '"""'
 
 # Behavior tuning
 # - primary_provider is the canonical source when a sync conflict occurs
