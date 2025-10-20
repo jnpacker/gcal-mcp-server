@@ -130,6 +130,48 @@ def detect_primary(spec: CommandSpec, primary_policy: str) -> str:
 	return candidate[0]
 
 
+def validate_no_orphaned_commands(commands: Dict[str, CommandSpec], config_path: Path) -> None:
+	"""Detect any command files in provider directories that aren't defined in the config.
+	
+	Raises SyncError if orphaned files are found.
+	"""
+	# Build set of all configured file paths
+	configured_paths: set = set()
+	for cmd_spec in commands.values():
+		for pspec in cmd_spec.providers.values():
+			configured_paths.add(pspec.path)
+	
+	# Provider directories and file extensions to check
+	root_dir = config_path.parent
+	providers = {
+		"claude": (".claude/commands", ".md"),
+		"cursor": (".cursor/commands", ".md"),
+		"gemini": (".gemini/commands", ".toml"),
+	}
+	
+	orphaned: Dict[str, list] = {}
+	for provider_name, (dir_path, extension) in providers.items():
+		provider_dir = root_dir / dir_path
+		if not provider_dir.exists():
+			continue
+		
+		for file_path in provider_dir.glob(f"*{extension}"):
+			if file_path.is_file() and file_path not in configured_paths:
+				if provider_name not in orphaned:
+					orphaned[provider_name] = []
+				orphaned[provider_name].append(file_path.name)
+	
+	if orphaned:
+		details = "; ".join(
+			f"{provider}: {', '.join(sorted(files))}"
+			for provider, files in sorted(orphaned.items())
+		)
+		raise SyncError(
+			f"Found orphaned command files not defined in config: {details}. "
+			f"Add them to {config_path.name} or remove the files."
+		)
+
+
 def sync_command(spec: CommandSpec, primary_policy: str, dry_run: bool = False) -> None:
 	# Gather provider contents and metadata
 	provider_contents: Dict[str, str] = {}
@@ -194,6 +236,7 @@ def main() -> int:
 		return 2
 
 	try:
+		validate_no_orphaned_commands(commands, config_path)
 		sync_command(commands[args.command], primary_policy, dry_run=args.dry_run)
 	except SyncError as exc:
 		print(str(exc), file=sys.stderr)
