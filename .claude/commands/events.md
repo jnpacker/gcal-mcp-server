@@ -16,6 +16,7 @@ Requirements:
 - Link column: always include the meeting link when available; do not include physical locations here. If a meeting link exists, show only a markdown link like [Meet](URL).
 - Show available time slots between meetings as separate rows outside the main table, enumerated A1, A2, etc. Use 🟩 blocks where each 🟩 equals 30 minutes.
 - Business hours: 9:00 AM – 5:00 PM for available slot calculations. Only list slots of 30 minutes or longer.
+- When calculating available time slots, declined events (where I have declined) are treated as free time and do not block availability.
 - Use the system `date` command to extract the current date/time for headers and any time-based filtering.
 - After the table, include a Conflicts section summarizing overlaps found by reviewing the events **Has Overlap:** value. Reference events by their row numbers and show the overlapping time window when available. If no conflicts, state: "Conflicts: None".
 - **Smart Meeting Suggestions**: When displaying events, analyze attendee responses and provide actionable suggestions:
