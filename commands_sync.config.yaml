@@ -11,7 +11,8 @@ commands:
           ---
           argument-hint: Day reference, like today, tomorrow, yesterday, next Tuesday
           description: Lists Google Calendar events
-          allowed-tools: [list_events, create_event, edit_event, delete_event]
+          allowed-tools: [list_events]
+          model: claude-haiku-4-5
           ---
         footer: ""
       cursor:
@@ -33,6 +34,7 @@ commands:
           argument-hint: Write the summary for the focus event, usually Focus time or Focus on development
           description: Creates a focus event
           allowed-tools: [list_events, create_event, edit_event, delete_event]
+          model: claude-haiku-4-5
           ---
         footer: ""
       cursor:
@@ -54,6 +56,7 @@ commands:
           argument-hint: Draw a graphical representation of my meeting overlaps with additional details and suggestions
           description: Summarize accepted meeting overlaps
           allowed-tools: [list_events]
+          model: claude-haiku-4-5
           ---
         footer: ""
       cursor:

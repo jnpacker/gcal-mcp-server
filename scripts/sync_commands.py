@@ -112,22 +112,14 @@ class SyncError(Exception):
 	pass
 
 
-def detect_primary(spec: CommandSpec, primary_policy: str) -> str:
-	if primary_policy and primary_policy != "auto":
-		if primary_policy not in spec.providers:
-			raise SyncError(f"Configured primary_provider '{primary_policy}' not found for command {spec.name}")
-		return primary_policy
-	# Auto: pick most recently modified existing file among providers
-	candidate: Optional[Tuple[str, float]] = None
-	for pname, pspec in spec.providers.items():
-		if pspec.path.exists():
-			mtime = pspec.path.stat().st_mtime
-			if candidate is None or mtime > candidate[1]:
-				candidate = (pname, mtime)
-	if candidate is None:
-		# none exists yet; default to claude as canonical
-		return "claude"
-	return candidate[0]
+def validate_provider(provider: str, spec: CommandSpec) -> None:
+	"""Validate that the specified provider exists in the command spec."""
+	if provider not in spec.providers:
+		valid_providers = ", ".join(sorted(spec.providers.keys()))
+		raise SyncError(
+			f"Provider '{provider}' not found for command '{spec.name}'. "
+			f"Valid providers: {valid_providers}"
+		)
 
 
 def validate_no_orphaned_commands(commands: Dict[str, CommandSpec], config_path: Path) -> None:
@@ -172,43 +164,24 @@ def validate_no_orphaned_commands(commands: Dict[str, CommandSpec], config_path:
 		)
 
 
-def sync_command(spec: CommandSpec, primary_policy: str, dry_run: bool = False) -> None:
+def sync_command(spec: CommandSpec, primary: str, dry_run: bool = False) -> None:
 	# Gather provider contents and metadata
 	provider_contents: Dict[str, str] = {}
 	provider_bodies: Dict[str, str] = {}
-	mtimes: Dict[str, float] = {}
 
 	for pname, pspec in spec.providers.items():
 		content = read_text(pspec.path)
 		provider_contents[pname] = content
-		mtimes[pname] = pspec.path.stat().st_mtime if pspec.path.exists() else 0.0
 		# Normalize by stripping any known provider wrappers to avoid cross-contamination
 		provider_bodies[pname] = strip_known_wrappers(content, spec.providers)
 
-	# Determine primary
-	primary = detect_primary(spec, primary_policy)
-
-	# Determine if any non-primary was edited since it was last synced from primary body
+	# Get primary body
 	primary_body = provider_bodies.get(primary, "")
-
-	# If non-primary body differs from primary body and file is newer than primary, raise
-	conflicting: Dict[str, Tuple[float, float]] = {}
-	for pname in spec.providers.keys():
-		if pname == primary:
-			continue
-		if provider_bodies.get(pname, "") and provider_bodies[pname] != primary_body:
-			if mtimes[pname] > mtimes.get(primary, 0.0):
-				conflicting[pname] = (mtimes[pname], mtimes.get(primary, 0.0))
-
-	if conflicting:
-		details = ", ".join(sorted(conflicting.keys()))
-		raise SyncError(
-			f"Sync conflict: {details} modified independently after primary '{primary}'. "
-			f"Primary is '{primary}'. Revert others or set primary_provider in config."
-		)
 
 	# Propagate primary body to others
 	for pname, pspec in spec.providers.items():
+		if pname == primary:
+			continue
 		desired = assemble_provider_content(pspec.header, primary_body, pspec.footer)
 		if provider_contents.get(pname, "") != desired:
 			if dry_run:
@@ -221,6 +194,7 @@ def sync_command(spec: CommandSpec, primary_policy: str, dry_run: bool = False) 
 def main() -> int:
 	parser = argparse.ArgumentParser(description="Sync command prompt files across providers")
 	parser.add_argument("command", help="Command core name, e.g. 'emails'")
+	parser.add_argument("provider", choices=["claude", "gemini", "cursor"], help="Provider that was changed: claude, gemini, or cursor")
 	parser.add_argument("--config", default=str(CONFIG_DEFAULT_PATH), help="Path to config YAML")
 	parser.add_argument("--dry-run", action="store_true", help="Preview changes without writing")
 	args = parser.parse_args()
@@ -230,14 +204,16 @@ def main() -> int:
 		print(f"Config not found: {config_path}", file=sys.stderr)
 		return 2
 
-	commands, primary_policy = load_config(config_path)
+	commands, _ = load_config(config_path)
 	if args.command not in commands:
 		print(f"Command '{args.command}' not defined in {config_path}", file=sys.stderr)
 		return 2
 
 	try:
+		spec = commands[args.command]
+		validate_provider(args.provider, spec)
 		validate_no_orphaned_commands(commands, config_path)
-		sync_command(commands[args.command], primary_policy, dry_run=args.dry_run)
+		sync_command(spec, args.provider, dry_run=args.dry_run)
 	except SyncError as exc:
 		print(str(exc), file=sys.stderr)
 		return 1

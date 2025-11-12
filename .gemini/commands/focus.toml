@@ -1,7 +1,6 @@
 description = "Manage Focus time"
 prompt = """
 
-
 Fill any Available slots with focus time if if they are 30m or greater. When a focus time is between 30m - 60m title it 'Focus paperwork', if the focus time is 60m or greater, title it 'Focus development'
 
 """
