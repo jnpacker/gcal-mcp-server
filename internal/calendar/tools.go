@@ -452,6 +452,12 @@ func (ct *CalendarTools) GetTools() []mcp.Tool {
 						"description": "Whether to detect and mark overlapping events with has_overlap field (defaults to true)",
 						"default":     true,
 					},
+					"output_format": map[string]interface{}{
+						"type":        "string",
+						"description": "Output format: 'text' for formatted display, 'json' for raw JSON data (defaults to 'text')",
+						"enum":        []string{"text", "json"},
+						"default":     "text",
+					},
 				},
 				Required: []string{},
 			},
@@ -1041,6 +1047,8 @@ func (ct *CalendarTools) handleListEvents(arguments map[string]interface{}) (*mc
 		DetectOverlaps: getBoolOrDefault(arguments, "detect_overlaps", true),
 	}
 
+	outputFormat := getStringOrDefault(arguments, "output_format", "text")
+
 	// Parse custom time range if provided
 	if params.TimeFilter == "custom" {
 		timeMinStr, ok := arguments["time_min"].(string)
@@ -1072,7 +1080,20 @@ func (ct *CalendarTools) handleListEvents(arguments map[string]interface{}) (*mc
 		return nil, fmt.Errorf("failed to list events: %v", err)
 	}
 
-	result := ct.formatEventsResult(events, params)
+	var result string
+
+	if outputFormat == "json" {
+		// Return JSON format with overlap detection
+		jsonResult := ct.formatEventsJSON(events, params)
+		jsonBytes, err := json.Marshal(jsonResult)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal events to JSON: %v", err)
+		}
+		result = string(jsonBytes)
+	} else {
+		// Return formatted text
+		result = ct.formatEventsResult(events, params)
+	}
 
 	return &mcp.CallToolResult{
 		Content: []mcp.ToolResult{{
@@ -1080,6 +1101,138 @@ func (ct *CalendarTools) handleListEvents(arguments map[string]interface{}) (*mc
 			Text: result,
 		}},
 	}, nil
+}
+
+func (ct *CalendarTools) formatEventsJSON(events *calendar.Events, params ListEventsParams) map[string]interface{} {
+	// Detect overlaps if requested
+	var overlaps map[string]bool
+	var overlappingPairs map[string][]string
+
+	if params.DetectOverlaps {
+		overlaps = ct.client.DetectOverlaps(events.Items, params.ShowDeclined)
+		// Build overlapping pairs map
+		overlappingPairs = make(map[string][]string)
+		for i, event1 := range events.Items {
+			if overlaps[event1.Id] {
+				// Parse event1 times
+				var start1, end1 time.Time
+				if event1.Start.DateTime != "" {
+					start1, _ = time.Parse(time.RFC3339, event1.Start.DateTime)
+					end1, _ = time.Parse(time.RFC3339, event1.End.DateTime)
+				}
+
+				var overlappingIds []string
+				for j, event2 := range events.Items {
+					if i != j {
+						// Parse event2 times
+						var start2, end2 time.Time
+						if event2.Start.DateTime != "" {
+							start2, _ = time.Parse(time.RFC3339, event2.Start.DateTime)
+							end2, _ = time.Parse(time.RFC3339, event2.End.DateTime)
+						}
+
+						if !start1.IsZero() && !start2.IsZero() && eventsOverlap(start1, end1, start2, end2) {
+							overlappingIds = append(overlappingIds, event2.Id)
+						}
+					}
+				}
+				if len(overlappingIds) > 0 {
+					overlappingPairs[event1.Id] = overlappingIds
+				}
+			}
+		}
+	}
+
+	// Build JSON result
+	result := make(map[string]interface{})
+	result["time_filter"] = params.TimeFilter
+	result["total_count"] = len(events.Items)
+
+	// Convert events to JSON-friendly format
+	eventsJSON := make([]map[string]interface{}, 0, len(events.Items))
+	for _, event := range events.Items {
+		eventJSON := make(map[string]interface{})
+		eventJSON["id"] = event.Id
+		eventJSON["summary"] = event.Summary
+		eventJSON["description"] = event.Description
+		eventJSON["location"] = event.Location
+		eventJSON["status"] = event.Status
+		eventJSON["eventType"] = event.EventType
+
+		// Start/End times
+		eventJSON["start"] = map[string]interface{}{
+			"dateTime": event.Start.DateTime,
+			"date":     event.Start.Date,
+			"timeZone": event.Start.TimeZone,
+		}
+		eventJSON["end"] = map[string]interface{}{
+			"dateTime": event.End.DateTime,
+			"date":     event.End.Date,
+			"timeZone": event.End.TimeZone,
+		}
+
+		// Attendees
+		if len(event.Attendees) > 0 {
+			attendeesJSON := make([]map[string]interface{}, 0, len(event.Attendees))
+			for _, attendee := range event.Attendees {
+				attendeeJSON := make(map[string]interface{})
+				attendeeJSON["email"] = attendee.Email
+				attendeeJSON["responseStatus"] = attendee.ResponseStatus
+				attendeeJSON["self"] = attendee.Self
+				attendeeJSON["organizer"] = attendee.Organizer
+				attendeesJSON = append(attendeesJSON, attendeeJSON)
+			}
+			eventJSON["attendees"] = attendeesJSON
+		}
+
+		// Overlap information
+		if overlaps != nil {
+			eventJSON["has_overlap"] = overlaps[event.Id]
+			if overlappingIds, exists := overlappingPairs[event.Id]; exists {
+				eventJSON["overlapping_event_ids"] = overlappingIds
+			}
+		}
+
+		// Color
+		if event.ColorId != "" {
+			eventJSON["colorId"] = event.ColorId
+		}
+
+		// Hangout/Meet link
+		if event.HangoutLink != "" {
+			eventJSON["hangoutLink"] = event.HangoutLink
+		}
+
+		// Focus time properties
+		if event.FocusTimeProperties != nil {
+			focusProps := make(map[string]interface{})
+			focusProps["autoDeclineMode"] = event.FocusTimeProperties.AutoDeclineMode
+			focusProps["chatStatus"] = event.FocusTimeProperties.ChatStatus
+			eventJSON["focusTimeProperties"] = focusProps
+		}
+
+		// Working location properties
+		if event.WorkingLocationProperties != nil {
+			workingLocProps := make(map[string]interface{})
+			workingLocProps["type"] = event.WorkingLocationProperties.Type
+			if event.WorkingLocationProperties.CustomLocation != nil {
+				workingLocProps["customLocation"] = event.WorkingLocationProperties.CustomLocation.Label
+			}
+			if event.WorkingLocationProperties.HomeOffice != nil {
+				workingLocProps["homeOffice"] = true
+			}
+			if event.WorkingLocationProperties.OfficeLocation != nil {
+				workingLocProps["officeLocation"] = event.WorkingLocationProperties.OfficeLocation.Label
+			}
+			eventJSON["workingLocationProperties"] = workingLocProps
+		}
+
+		eventsJSON = append(eventsJSON, eventJSON)
+	}
+
+	result["events"] = eventsJSON
+
+	return result
 }
 
 func (ct *CalendarTools) formatEventsResult(events *calendar.Events, params ListEventsParams) string {

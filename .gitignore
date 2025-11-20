@@ -8,4 +8,5 @@ bin/
 token.json
 credentials.json
 .mcp.json
+__pycache__/
 
