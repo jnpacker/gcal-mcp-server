@@ -336,6 +336,7 @@ class CalendarTUI:
         self.recommendations_loading = False
         self.recommendations_scroll_offset = 0
         self.recommendations_task = None  # Background task for fetching recommendations
+        self._current_recommendations_task_id = None  # Track which task is current to prevent race conditions
         self.recommendations_view_date = None  # Track which date recommendations were generated for
         self.recommendations_display_mode = None  # Track which display mode recommendations were generated for
 
@@ -1364,8 +1365,10 @@ class CalendarTUI:
         # Convert events to JSON-serializable format
         events_data = []
         for event in filtered_events:
-            # Skip available slots
+            # Skip available slots and workingLocation events
             if event.is_available:
+                continue
+            if event.event_type == 'workingLocation':
                 continue
 
             event_dict = {
@@ -1388,6 +1391,9 @@ class CalendarTUI:
 
     async def _fetch_recommendations_background(self):
         """Background task to fetch recommendations without blocking the UI"""
+        # Capture the task ID at start to check if we're still current when we finish
+        my_task_id = id(asyncio.current_task())
+
         try:
             # Collect event data
             events_data = self._collect_events_for_recommendations()
@@ -1395,24 +1401,19 @@ class CalendarTUI:
             # Convert to JSON
             events_json = json.dumps(events_data, indent=2)
 
-            # Build the prompt for Claude Code
-            prompt = f"""Analyze the following calendar events and provide recommendations:
+            # Write events to file
+            event_prompt_file = "event-prompt.json"
+            with open(event_prompt_file, 'w') as f:
+                f.write(events_json)
 
-{events_json}
-
-Focus on:
-- Events with conflicts (has_overlap: true)
-- Back-to-back meetings exceeding 2 hours
-- Meetings that should be declined or rescheduled
-
-Provide recommendations in the specified format."""
+            self.debug_log(f"Calendar data written to {event_prompt_file}")
 
             # Call Claude Code /recommend command (async, non-blocking)
             self.debug_log(f"Calling claude /recommend with {events_data['count']} events")
 
             # Use asyncio subprocess for non-blocking execution
             process = await asyncio.create_subprocess_exec(
-                'claude', '/recommend', prompt,
+                'claude', '/recommend', '@./'+event_prompt_file,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
@@ -1426,18 +1427,44 @@ Provide recommendations in the specified format."""
 
                 if process.returncode == 0:
                     recommendations = stdout.decode('utf-8').strip()
-                    if recommendations:
-                        self.recommendations_text = recommendations
-                    else:
-                        self.recommendations_text = "No recommendations generated."
+
+                    # Debug: Dump the complete output received from Claude Code
+                    if self.debug:
+                        self.debug_log("=" * 80)
+                        self.debug_log("RAW OUTPUT RECEIVED FROM CLAUDE CODE (STDOUT):")
+                        self.debug_log("=" * 80)
+                        self.debug_log(recommendations if recommendations else "(empty response)")
+                        self.debug_log("=" * 80)
+
+                        # Also log stderr in case there's thinking or other info there
+                        stderr_text = stderr.decode('utf-8').strip() if stderr else ""
+                        if stderr_text:
+                            self.debug_log("=" * 80)
+                            self.debug_log("STDERR OUTPUT FROM CLAUDE CODE:")
+                            self.debug_log("=" * 80)
+                            self.debug_log(stderr_text)
+                            self.debug_log("=" * 80)
+
+                        self.debug_log("Note: Claude thinking output may be included above if enabled in Claude Code settings.")
+
+                    # Only update if we're still the current task
+                    if hasattr(self, '_current_recommendations_task_id') and my_task_id == self._current_recommendations_task_id:
+                        if recommendations:
+                            self.recommendations_text = recommendations
+                        else:
+                            self.recommendations_text = "No recommendations generated."
                 else:
-                    error_msg = stderr.decode('utf-8').strip() if stderr else "Unknown error"
-                    self.recommendations_text = f"❌ Error getting recommendations:\n{error_msg}"
-                    self.debug_log(f"Claude /recommend failed: {error_msg}")
+                    # Only update if we're still the current task
+                    if hasattr(self, '_current_recommendations_task_id') and my_task_id == self._current_recommendations_task_id:
+                        error_msg = stderr.decode('utf-8').strip() if stderr else "Unknown error"
+                        self.recommendations_text = f"❌ Error getting recommendations:\n{error_msg}"
+                        self.debug_log(f"Claude /recommend failed: {error_msg}")
 
             except asyncio.TimeoutError:
-                self.recommendations_text = "❌ Request timed out. Please try again."
-                self.debug_log("Claude /recommend timed out")
+                # Only update if we're still the current task
+                if hasattr(self, '_current_recommendations_task_id') and my_task_id == self._current_recommendations_task_id:
+                    self.recommendations_text = "❌ Request timed out. Please try again."
+                    self.debug_log("Claude /recommend timed out")
                 # Kill the process if it's still running
                 try:
                     process.kill()
@@ -1446,20 +1473,44 @@ Provide recommendations in the specified format."""
                     pass
 
         except FileNotFoundError:
-            self.recommendations_text = "❌ Claude Code CLI not found. Make sure 'claude' is in your PATH."
-            self.debug_log("claude command not found")
+            # Only update if we're still the current task
+            if hasattr(self, '_current_recommendations_task_id') and my_task_id == self._current_recommendations_task_id:
+                self.recommendations_text = "❌ Claude Code CLI not found. Make sure 'claude' is in your PATH."
+                self.debug_log("claude command not found")
+        except asyncio.CancelledError:
+            # Task was cancelled, don't update any state (a new task is running)
+            self.debug_log(f"Recommendations task {my_task_id} was cancelled")
+            raise  # Re-raise to properly handle cancellation
         except Exception as e:
-            self.recommendations_text = f"❌ Error: {str(e)}"
-            self.debug_log(f"Error getting recommendations: {e}")
+            # Only update state if we're still the current task
+            if hasattr(self, '_current_recommendations_task_id') and my_task_id == self._current_recommendations_task_id:
+                self.recommendations_text = f"❌ Error: {str(e)}"
+                self.debug_log(f"Error getting recommendations: {e}")
         finally:
-            self.recommendations_loading = False
-            self.recommendations_task = None
-            # Save which view these recommendations were generated for
-            self.recommendations_view_date = self.current_view_date.date()
-            self.recommendations_display_mode = self.display_mode
-            # Redraw if modal is visible
-            if self.show_recommendations:
-                self.draw()
+            # Only update state if we're still the current task
+            if hasattr(self, '_current_recommendations_task_id') and my_task_id == self._current_recommendations_task_id:
+                self.recommendations_loading = False
+                self.recommendations_task = None
+                # Save which view these recommendations were generated for
+                self.recommendations_view_date = self.current_view_date.date()
+                self.recommendations_display_mode = self.display_mode
+
+                # Clean up event-prompt.json if not in debug mode
+                if not self.debug:
+                    try:
+                        if os.path.exists("event-prompt.json"):
+                            os.remove("event-prompt.json")
+                    except Exception as e:
+                        self.debug_log(f"Failed to remove event-prompt.json: {e}")
+
+                # Always redraw to update light bulb indicator in footer
+                # If modal is visible, full redraw; otherwise just update footer
+                if self.show_recommendations:
+                    self.draw()
+                else:
+                    # Update footer to show light bulb indicator
+                    self.draw_footer()
+                    self.stdscr.refresh()
 
     def start_recommendations_fetch(self, show_popup: bool = True):
         """Start fetching recommendations in background
@@ -1481,8 +1532,54 @@ Provide recommendations in the specified format."""
         self.recommendations_text = ""  # Empty text while loading
         self.recommendations_scroll_offset = 0  # Reset scroll position
 
-        # Start background task
+        # Start background task and store reference to check if it's still current when it completes
         self.recommendations_task = asyncio.create_task(self._fetch_recommendations_background())
+        # Store the task ID so the background task can check if it's still current
+        self._current_recommendations_task_id = id(self.recommendations_task)
+
+    def _wrap_text_lines(self, text: str, max_width: int) -> list:
+        """Wrap text lines to fit within max_width, preserving formatting"""
+        wrapped_lines = []
+
+        for line in text.split('\n'):
+            if len(line) <= max_width:
+                # Line fits, add as-is
+                wrapped_lines.append(line)
+            else:
+                # Line is too long, need to wrap
+                # Preserve leading whitespace for indentation (calculate once)
+                leading_spaces = len(line) - len(line.lstrip())
+                indent = line[:leading_spaces]
+                continuation_indent = indent + "  "  # Add extra indent for wrapped lines
+
+                # Wrap the line at word boundaries
+                remaining = line
+
+                while remaining:
+                    if len(remaining) <= max_width:
+                        wrapped_lines.append(remaining)
+                        break
+
+                    # Find the last space within max_width
+                    wrap_point = max_width
+                    for i in range(max_width, 0, -1):
+                        if remaining[i-1] in (' ', '-', ','):
+                            wrap_point = i
+                            break
+
+                    # If no good break point found, just hard break
+                    if wrap_point == max_width and len(remaining) > max_width:
+                        wrap_point = max_width
+
+                    # Add the wrapped portion
+                    wrapped_lines.append(remaining[:wrap_point])
+
+                    # Continue with remainder, adding continuation indent
+                    remaining = remaining[wrap_point:].lstrip()
+                    if remaining:
+                        remaining = continuation_indent + remaining
+
+        return wrapped_lines
 
     def draw_recommendations(self):
         """Draw recommendations overlay"""
@@ -1552,8 +1649,11 @@ Provide recommendations in the specified format."""
                         self.stdscr.addstr(y_pos, start_x, "║" + " " * (modal_width - 2) + "║", curses.color_pair(1))
 
             else:
-                # Show recommendations content
-                lines = self.recommendations_text.split('\n')
+                # Show recommendations content with word wrapping
+                # Wrap text to fit modal width (accounting for borders and padding)
+                max_line_width = modal_width - 4
+                lines = self._wrap_text_lines(self.recommendations_text, max_line_width)
+
                 max_content_height = modal_height - 5
                 total_lines = len(lines)
 
@@ -1568,23 +1668,25 @@ Provide recommendations in the specified format."""
 
                     self.stdscr.addstr(current_y, start_x, "║", curses.color_pair(1))
 
-                    # Truncate line if too long
-                    display_line = line[:modal_width - 4]
+                    # Line is already wrapped to fit, just ensure it's exactly the right length
+                    display_line = line[:max_line_width].ljust(max_line_width)
 
-                    # Color code recommendations
+                    # Color code recommendations based on original line content
                     attr = curses.color_pair(1)
-                    if line.strip().startswith('DECLINE:'):
+                    line_stripped = line.strip()
+                    if line_stripped.startswith('DECLINE:') or 'CONFLICT' in line_stripped:
                         attr = curses.color_pair(2)  # Red
-                    elif line.strip().startswith('RESCHEDULE:'):
+                    elif line_stripped.startswith('RESCHEDULE:'):
                         attr = curses.color_pair(4)  # Magenta
-                    elif line.strip().startswith('TENTATIVE:'):
+                    elif line_stripped.startswith('TENTATIVE:'):
                         attr = curses.color_pair(4)  # Magenta
-                    elif line.strip().startswith('ACCEPT:'):
+                    elif line_stripped.startswith('ACCEPT:'):
                         attr = curses.color_pair(3)  # Green
-                    elif line.strip().startswith(tuple(str(i) + '.' for i in range(1, 20))):
+                    elif line_stripped and line_stripped[0].isdigit() and '. ' in line_stripped[:5]:
+                        # Number followed by period (e.g., "1. ", "2. ")
                         attr = curses.color_pair(1) | curses.A_BOLD
 
-                    self.stdscr.addstr(current_y, start_x + 2, display_line.ljust(modal_width - 4), attr)
+                    self.stdscr.addstr(current_y, start_x + 2, display_line, attr)
                     self.stdscr.addstr(current_y, start_x + modal_width - 1, "║", curses.color_pair(1))
                     current_y += 1
 
@@ -1598,7 +1700,9 @@ Provide recommendations in the specified format."""
             if self.recommendations_loading:
                 footer_text = "Press ESC to cancel"
             else:
-                lines = self.recommendations_text.split('\n')
+                # Use wrapped lines for accurate scroll calculation
+                max_line_width = modal_width - 4
+                lines = self._wrap_text_lines(self.recommendations_text, max_line_width)
                 total_lines = len(lines)
                 max_content_height = modal_height - 5
 
@@ -1636,7 +1740,14 @@ Provide recommendations in the specified format."""
         """Draw the footer with help text"""
         height, width = self.stdscr.getmaxyx()
 
-        help_text = "↑/↓: Navigate | ←/→: Prev/Next Day | 1: Single Day | 2: Two Days | Enter: Attendees | r: Recommendations | a: Accept | t: Tentative | d: Decline/Delete | -: Toggle Declined | f: Focus | q: Quit"
+        # Add indicator if recommendations are ready but not shown
+        recommendations_indicator = ""
+        if (not self.show_recommendations and
+            not self.recommendations_loading and
+            self._are_recommendations_valid_for_current_view()):
+            recommendations_indicator = "💡 "  # Lightbulb emoji indicates recommendations are ready
+
+        help_text = f"↑/↓: Navigate | ←/→: Prev/Next Day | 1: Single Day | 2: Two Days | Enter: Attendees | {recommendations_indicator}r: Recommendations | a: Accept | t: Tentative | d: Decline/Delete | -: Toggle Declined | f: Focus | q: Quit"
 
         # Status legend with declined toggle indicator
         declined_status = "👁️ Shown" if self.show_declined_locally else "🙈 Hidden"
@@ -2400,9 +2511,12 @@ Provide recommendations in the specified format."""
             elif key in [curses.KEY_UP, curses.KEY_DOWN]:
                 # Handle scrolling in recommendations modal
                 if self.show_recommendations and not self.recommendations_loading:
-                    lines = self.recommendations_text.split('\n')
+                    # Use wrapped lines for accurate scrolling
                     height, width = self.stdscr.getmaxyx()
+                    modal_width = min(100, width - 4)
                     modal_height = min(40, height - 4)
+                    max_line_width = modal_width - 4
+                    lines = self._wrap_text_lines(self.recommendations_text, max_line_width)
                     max_content_height = modal_height - 5
                     total_lines = len(lines)
 
@@ -2457,6 +2571,11 @@ Provide recommendations in the specified format."""
                 else:
                     needs_redraw = False
             elif key == curses.KEY_LEFT:
+                # Ignore if modal is open
+                if self.show_attendee_details or self.show_recommendations:
+                    needs_redraw = False
+                    continue
+
                 # Navigate to previous weekday
                 prev_date = self.current_view_date
                 needs_refetch = self.navigate_to_weekday(-1)
@@ -2481,6 +2600,11 @@ Provide recommendations in the specified format."""
                     self.start_recommendations_fetch(show_popup=False)
                     needs_redraw = True
             elif key == curses.KEY_RIGHT:
+                # Ignore if modal is open
+                if self.show_attendee_details or self.show_recommendations:
+                    needs_redraw = False
+                    continue
+
                 # Navigate to next weekday
                 prev_date = self.current_view_date
                 needs_refetch = self.navigate_to_weekday(1)
@@ -2505,6 +2629,11 @@ Provide recommendations in the specified format."""
                     self.start_recommendations_fetch(show_popup=False)
                     needs_redraw = True
             elif key == ord('1'):
+                # Ignore if modal is open
+                if self.show_attendee_details or self.show_recommendations:
+                    needs_redraw = False
+                    continue
+
                 # Switch to single day view and reset to today
                 # Clear cached recommendations since view is changing
                 self._clear_recommendations()
@@ -2518,6 +2647,11 @@ Provide recommendations in the specified format."""
                 self.start_recommendations_fetch(show_popup=False)
                 needs_redraw = True
             elif key == ord('2'):
+                # Ignore if modal is open
+                if self.show_attendee_details or self.show_recommendations:
+                    needs_redraw = False
+                    continue
+
                 # Switch to two day view and reset to today
                 # Clear cached recommendations since view is changing
                 self._clear_recommendations()
@@ -2531,14 +2665,29 @@ Provide recommendations in the specified format."""
                 self.start_recommendations_fetch(show_popup=False)
                 needs_redraw = True
             elif key == ord('a'):
+                # Ignore if modal is open
+                if self.show_attendee_details or self.show_recommendations:
+                    needs_redraw = False
+                    continue
+
                 # Accept - optimistic update (instant, no spinner)
                 await self.handle_rsvp('accepted')
                 needs_redraw = True
             elif key == ord('t'):
+                # Ignore if modal is open
+                if self.show_attendee_details or self.show_recommendations:
+                    needs_redraw = False
+                    continue
+
                 # Tentative - optimistic update (instant, no spinner)
                 await self.handle_rsvp('tentative')
                 needs_redraw = True
             elif key == ord('d'):
+                # Ignore if modal is open
+                if self.show_attendee_details or self.show_recommendations:
+                    needs_redraw = False
+                    continue
+
                 # Check if current event is a focus time - if so, delete it
                 filtered_events = self.get_filtered_events()
                 if filtered_events and self.current_row < len(filtered_events):
@@ -2556,6 +2705,11 @@ Provide recommendations in the specified format."""
                     await self.handle_rsvp('declined')
                     needs_redraw = True
             elif key == ord('f'):
+                # Ignore if modal is open
+                if self.show_attendee_details or self.show_recommendations:
+                    needs_redraw = False
+                    continue
+
                 # Optimistic update - instant, no spinner
                 await self.create_focus_time()
                 # Redraw full screen to show new focus time event
@@ -2574,6 +2728,11 @@ Provide recommendations in the specified format."""
                     self.start_recommendations_fetch(show_popup=True)
                 needs_redraw = True
             elif key == ord('-'):
+                # Ignore if modal is open
+                if self.show_attendee_details or self.show_recommendations:
+                    needs_redraw = False
+                    continue
+
                 # Toggle showing/hiding declined events
                 self.show_declined_locally = not self.show_declined_locally
 

@@ -10,3 +10,5 @@ credentials.json
 .mcp.json
 __pycache__/
 
+event-prompt.json
+debug.log
