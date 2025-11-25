@@ -305,11 +305,11 @@ Focus time is a special event type that:
 - Helps you block out time for deep work
 
 To create focus time:
-1. Press `f` to enter focus time mode
-2. Use `↑`/`↓` to adjust duration (15-480 minutes)
-3. Press `Enter` to create the block
+1. Navigate to an available time slot (shown with green 🟩 boxes)
+2. Press `f` to instantly create focus time for that slot
+3. The focus time event appears immediately while saving to Google Calendar in the background
 
-The focus time will be created at the next available 15-minute interval.
+**Note:** Focus time can only be created on available time slots. Select a green box slot first, then press `f`.
 
 ## Requirements
 

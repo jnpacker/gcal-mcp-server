@@ -12,7 +12,7 @@ import json
 import asyncio
 import os
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 from typing import List, Dict, Optional
 import argparse
 
@@ -95,11 +95,13 @@ class CalendarEvent:
         num_blocks = int(duration_minutes / 30)
 
         # Check if this slot is during core hours
-        start_hour = self.start_time.hour
-        end_hour = self.end_time.hour
+        # Create core hours boundaries for comparison
+        core_start = self.start_time.replace(hour=self.core_start_hour, minute=0, second=0, microsecond=0)
+        core_end = self.start_time.replace(hour=self.core_end_hour, minute=0, second=0, microsecond=0)
 
-        # Determine if fully outside core hours, partially outside, or fully inside
-        is_outside_core = (end_hour <= self.core_start_hour or start_hour >= self.core_end_hour)
+        # Determine if fully outside core hours
+        # A slot is outside core if it ends before core starts OR starts after core ends
+        is_outside_core = (self.end_time <= core_start or self.start_time >= core_end)
 
         if is_outside_core:
             # Grey boxes for out-of-hours (using black square emoji)
@@ -114,9 +116,11 @@ class CalendarEvent:
         """Extract response status from event data"""
         # Check if user is an attendee and get their response
         attendees = event_data.get('attendees', [])
+
         for attendee in attendees:
             if attendee.get('self', False):
-                return attendee.get('responseStatus', 'needsAction')
+                status = attendee.get('responseStatus', 'needsAction')
+                return status
         return event_data.get('responseStatus', 'needsAction')
 
     def _parse_time(self, time_obj: Dict) -> Optional[datetime]:
@@ -302,24 +306,37 @@ class CalendarTUI:
         self.is_loading = False
         self.loading_message = ""
 
-        # Time filter parameters
-        self.time_filter = "today"
+        # Time range parameters (tracks loaded data range)
         self.time_min = None
         self.time_max = None
+
+        # Current view date (which day we're looking at)
+        self.current_view_date = datetime.now().astimezone()
+
+        # Display mode: 1 = current day only, 2 = current day + tomorrow
+        self.display_mode = 1
 
         # Core hours (9am to 5pm)
         self.core_start_hour = 9
         self.core_end_hour = 17
 
-        # Recommendations (displayed inline below events, non-interactive)
-        self.show_recommendations = False
-        self.recommendations_text = ""
-        self.recommendations_list = []  # Parsed list of recommendation items (max 2 lines each)
-        self.recommendations_task = None  # Background task for fetching recommendations
+        # Background fetch task
+        self.background_fetch_task = None
+
+        # Track which dates have loaded data (for mini calendar display)
+        self.loaded_dates = set()  # Set of date objects
 
         # Attendee details overlay
         self.show_attendee_details = False
         self.attendee_details_event = None
+
+        # Loading state indicator with spinner
+        self.is_fetching = False
+        self.spinner_frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+        self.spinner_index = 0
+
+        # Toggle for showing/hiding declined events
+        self.show_declined_locally = False
 
         # Setup colors
         curses.start_color()
@@ -338,12 +355,26 @@ class CalendarTUI:
             # Use red as fallback if terminal doesn't support custom colors
             conflict_color = curses.COLOR_RED
 
+        # Try to create custom light grey color for available slots
+        if curses.can_change_color():
+            try:
+                # Define color 15 as light grey (RGB values scaled to 0-1000)
+                # Using color 15 to avoid conflicts with standard 0-7 colors
+                curses.init_color(15, 600, 600, 600)  # Light grey RGB: (153, 153, 153)
+                light_grey_color = 15
+            except:
+                # Fall back to white if custom colors don't work
+                light_grey_color = curses.COLOR_WHITE
+        else:
+            # Use white as fallback if terminal doesn't support custom colors
+            light_grey_color = curses.COLOR_WHITE
+
         # Regular colors (text on black background)
         curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_WHITE)  # Default selection (black on white)
         curses.init_pair(2, conflict_color, curses.COLOR_BLACK)  # Declined/Overlap (dark red)
         curses.init_pair(3, curses.COLOR_GREEN, curses.COLOR_BLACK)  # Accepted
         curses.init_pair(4, curses.COLOR_MAGENTA, curses.COLOR_BLACK) # Tentative (magenta)
-        curses.init_pair(5, curses.COLOR_WHITE, curses.COLOR_BLACK)  # Light grey (Available/needsAction)
+        curses.init_pair(5, light_grey_color, curses.COLOR_BLACK)  # Light grey (Available/needsAction)
         curses.init_pair(6, curses.COLOR_YELLOW, curses.COLOR_BLACK) # Focus time (yellow)
         curses.init_pair(7, curses.COLOR_BLUE, curses.COLOR_BLACK)   # Links
 
@@ -354,6 +385,11 @@ class CalendarTUI:
 
         # Dark grey for out-of-hours available slots (dimmed white appears grey)
         curses.init_pair(11, curses.COLOR_WHITE, curses.COLOR_BLACK)  # Will be used with A_DIM
+
+        # Mini calendar colors
+        curses.init_pair(12, curses.COLOR_BLACK, curses.COLOR_GREEN)  # Current day (green background)
+        curses.init_pair(13, curses.COLOR_WHITE, curses.COLOR_BLACK)  # Loaded day (white text)
+        curses.init_pair(14, curses.COLOR_BLACK, curses.COLOR_WHITE)  # Selected day cursor (black on white)
 
         # Hide cursor
         curses.curs_set(0)
@@ -418,23 +454,57 @@ class CalendarTUI:
             self.update_status_line()  # Update to show error
             raise
 
-    async def fetch_events(self, time_filter: str = "today", time_min: str = None, time_max: str = None) -> bool:
-        """Fetch events from MCP server"""
+    async def fetch_events(self, quick_mode: bool = False) -> bool:
+        """Fetch events from MCP server
+
+        Args:
+            quick_mode: If True, only fetch today to end of week (fast initial load)
+                       If False, fetch full 3 weeks (previous, current, next)
+        """
         try:
+            now = datetime.now().astimezone()
+
+            if quick_mode:
+                # Quick mode: today + tomorrow (if tomorrow is not weekend)
+                start_of_range = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+                # Check if tomorrow is a weekday
+                tomorrow = now + timedelta(days=1)
+                if tomorrow.weekday() < 5:  # Monday=0, Friday=4
+                    # Tomorrow is a weekday, fetch it too
+                    end_of_range = tomorrow.replace(hour=23, minute=59, second=59, microsecond=0)
+                else:
+                    # Tomorrow is weekend, just fetch today
+                    end_of_range = now.replace(hour=23, minute=59, second=59, microsecond=0)
+            else:
+                # Full mode: 3-week range (previous, current, next week)
+                # Find Monday of current week
+                days_since_monday = now.weekday()  # 0 = Monday, 6 = Sunday
+                current_monday = now - timedelta(days=days_since_monday)
+
+                # Previous week starts on Monday of last week
+                previous_monday = current_monday - timedelta(days=7)
+                start_of_range = previous_monday.replace(hour=0, minute=0, second=0, microsecond=0)
+
+                # Next week ends on Sunday (6 days after next Monday + 1 day)
+                next_monday = current_monday + timedelta(days=7)
+                end_of_range = (next_monday + timedelta(days=6)).replace(hour=23, minute=59, second=59, microsecond=0)
+
             # Build request parameters
             params = {
-                "time_filter": time_filter,
+                "time_filter": "custom",
+                "time_min": start_of_range.isoformat(),
+                "time_max": end_of_range.isoformat(),
                 "timezone": self.timezone,
                 "detect_overlaps": True,
-                "show_declined": False,
+                "show_declined": True,  # Always fetch declined events for toggle visibility
                 "max_results": 250,
                 "output_format": "json"
             }
 
-            # Add time_min and time_max if using custom filter
-            if time_filter == "custom" and time_min and time_max:
-                params["time_min"] = time_min
-                params["time_max"] = time_max
+            # Store the time range for reference
+            self.time_min = start_of_range.isoformat()
+            self.time_max = end_of_range.isoformat()
 
             # Call the MCP list_events tool with JSON output format
             result = await self.mcp_client.call_tool("list_events", params)
@@ -460,11 +530,28 @@ class CalendarTUI:
                 filtered_events.append(event)
             self.events = filtered_events
 
+            # Client-side filter: Remove conflicts involving declined events
+            # Declined events should NEVER cause conflicts, regardless of toggle state
+            declined_ids = {e.id for e in self.events if e.response_status == 'declined'}
+            for event in self.events:
+                if event.response_status == 'declined':
+                    # Declined events themselves have no conflicts
+                    event.has_overlap = False
+                    event.overlapping_event_ids = []
+                elif event.has_overlap and event.overlapping_event_ids:
+                    # Remove declined event IDs from overlap list
+                    event.overlapping_event_ids = [
+                        eid for eid in event.overlapping_event_ids if eid not in declined_ids
+                    ]
+                    # If no overlaps remain, clear the flag
+                    if not event.overlapping_event_ids:
+                        event.has_overlap = False
+
             # Insert available time slots
             self._insert_available_slots()
 
-            # Start background recommendations analysis
-            self.start_recommendations_analysis()
+            # Update loaded dates for mini calendar
+            self._update_loaded_dates()
 
             return True
 
@@ -476,15 +563,94 @@ class CalendarTUI:
             self.status_message = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
             return False
 
+    def _update_loaded_dates(self):
+        """Update the set of loaded dates based on loaded time range"""
+        # Mark all dates in the loaded range as loaded (not just dates with events)
+        if self.time_min and self.time_max:
+            start_date = datetime.fromisoformat(self.time_min).date()
+            end_date = datetime.fromisoformat(self.time_max).date()
+
+            # Add all dates in range
+            current_date = start_date
+            while current_date <= end_date:
+                # Only add weekdays
+                if current_date.weekday() < 5:  # Monday=0, Friday=4
+                    self.loaded_dates.add(current_date)
+                current_date += timedelta(days=1)
+
+    def get_filtered_events(self) -> List[CalendarEvent]:
+        """Get events filtered by current display mode, view date, and declined status"""
+        view_date = self.current_view_date
+        day_start = view_date.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Helper function to check if event should be included based on decline status
+        def include_event(event):
+            # Always show non-declined events
+            if event.response_status != 'declined':
+                return True
+            # Show declined events only if toggle is on
+            return self.show_declined_locally
+
+        if self.display_mode == 1:
+            # Show only the current view day's events
+            day_end = view_date.replace(hour=23, minute=59, second=59, microsecond=0)
+            filtered = []
+            for event in self.events:
+                # Skip declined events if toggle is off
+                if not include_event(event):
+                    continue
+
+                if event.is_all_day:
+                    # Include all-day events that fall on the view date
+                    if event.start_time and event.start_time.date() == view_date.date():
+                        filtered.append(event)
+                elif event.start_time:
+                    # Include events that start on the view date
+                    if day_start <= event.start_time <= day_end:
+                        filtered.append(event)
+            return filtered
+
+        elif self.display_mode == 2:
+            # Show current view day and next day's events
+            next_day_end = (view_date + timedelta(days=1)).replace(hour=23, minute=59, second=59, microsecond=0)
+            filtered = []
+            for event in self.events:
+                # Skip declined events if toggle is off
+                if not include_event(event):
+                    continue
+
+                if event.is_all_day:
+                    # Include all-day events that fall on view date or next day
+                    if event.start_time:
+                        event_date = event.start_time.date()
+                        next_date = (view_date + timedelta(days=1)).date()
+                        if event_date in [view_date.date(), next_date]:
+                            filtered.append(event)
+                elif event.start_time:
+                    # Include events that start on view date or next day
+                    if day_start <= event.start_time <= next_day_end:
+                        filtered.append(event)
+            return filtered
+
+        # Default: return all events (display_mode == 3), filtered by decline status
+        if self.show_declined_locally:
+            return self.events
+        else:
+            # Filter out declined events
+            return [e for e in self.events if include_event(e)]
+
     def _find_current_event(self):
         """Find and position cursor at the current or next event"""
-        if not self.events:
+        # Use filtered events for navigation
+        filtered_events = self.get_filtered_events()
+        if not filtered_events:
+            self.current_row = 0
             return
 
         now = datetime.now().astimezone()
 
         # First, try to find the currently active event
-        for i, event in enumerate(self.events):
+        for i, event in enumerate(filtered_events):
             # Skip available slots and all-day events
             if event.is_available or event.is_all_day:
                 continue
@@ -501,7 +667,7 @@ class CalendarTUI:
                     return
 
         # If no current event, find the next upcoming event
-        for i, event in enumerate(self.events):
+        for i, event in enumerate(filtered_events):
             # Skip available slots and all-day events
             if event.is_available or event.is_all_day:
                 continue
@@ -527,9 +693,18 @@ class CalendarTUI:
             self.scroll_offset = self.current_row
 
     def _insert_available_slots(self):
-        """Insert available time slots for gaps of 30min or more"""
-        # Filter out all-day events and sort by start time
-        timed_events = [e for e in self.events if not e.is_all_day and e.start_time]
+        """Insert available time slots for gaps of 30min or more during core hours"""
+        # Filter out all-day events, available slots, and sort by start time
+        # Also filter out declined events (they're ALWAYS treated as free time)
+        def should_block_availability(e):
+            if e.is_all_day or not e.start_time or e.is_available:
+                return False
+            # Declined events NEVER block available time, regardless of toggle
+            if e.response_status == 'declined':
+                return False
+            return True
+
+        timed_events = [e for e in self.events if should_block_availability(e)]
         if not timed_events:
             return
 
@@ -547,97 +722,247 @@ class CalendarTUI:
             core_end = datetime.combine(event_date, datetime.min.time().replace(hour=self.core_end_hour))
             core_end = core_end.replace(tzinfo=event.end_time.tzinfo)
 
-            # Add the event first
+            # Check for slot BEFORE first event of this day
+            is_first_event_of_day = (i == 0) or (timed_events[i-1].start_time.date() != event_date)
+            if is_first_event_of_day:
+                gap_before_first = (event.start_time - core_start).total_seconds() / 60
+                if gap_before_first >= 30 and event.start_time > core_start:
+                    # Create slot from core start to first event
+                    available_event = CalendarEvent({
+                        'start': {'dateTime': core_start.isoformat()},
+                        'end': {'dateTime': event.start_time.isoformat()}
+                    }, is_available=True, core_start_hour=self.core_start_hour, core_end_hour=self.core_end_hour)
+                    new_events.append(available_event)
+
+            # Add the event
             new_events.append(event)
 
-            # Check if this is the first event and it ends before core hours start
-            added_core_hours_slot = False
-            if i == 0 and event.end_time < core_start:
-                # Add grey available slot between event end and core start
-                available_event = CalendarEvent({
-                    'start': {'dateTime': event.end_time.isoformat()},
-                    'end': {'dateTime': core_start.isoformat()}
-                }, is_available=True, core_start_hour=self.core_start_hour, core_end_hour=self.core_end_hour)
-                new_events.append(available_event)
-                added_core_hours_slot = True
+            # Check for slot AFTER last event of this day
+            is_last_event_of_day = (i == len(timed_events) - 1) or (timed_events[i+1].start_time.date() != event_date)
+            if is_last_event_of_day:
+                gap_after_last = (core_end - event.end_time).total_seconds() / 60
+                if gap_after_last >= 30 and event.end_time < core_end:
+                    # Create slot from last event to core end
+                    available_event = CalendarEvent({
+                        'start': {'dateTime': event.end_time.isoformat()},
+                        'end': {'dateTime': core_end.isoformat()}
+                    }, is_available=True, core_start_hour=self.core_start_hour, core_end_hour=self.core_end_hour)
+                    new_events.append(available_event)
 
             # Check if there's a next event
             if i < len(timed_events) - 1:
                 next_event = timed_events[i + 1]
+
+                # Skip if events are on different days (don't create overnight slots)
+                if event.end_time.date() != next_event.start_time.date():
+                    continue
+
                 gap_minutes = (next_event.start_time - event.end_time).total_seconds() / 60
 
-                # Only add available slot if:
-                # 1. Gap is 30min or more
-                # 2. We didn't already add a core-hours slot (to avoid duplicates)
-                # 3. No other events overlap this gap
-                # Note: Grey vs green boxes are determined by CalendarEvent based on core hours
-                if gap_minutes >= 30 and not added_core_hours_slot:
-                    # Check if any other events overlap this potential gap
+                # Only add available slot if gap is 30min or more
+                if gap_minutes >= 30:
                     gap_start = event.end_time
                     gap_end = next_event.start_time
-                    has_overlap = False
 
+                    # Check if any other events overlap this potential gap
+                    has_overlap = False
                     for other_event in timed_events:
-                        # Skip the current event and next event
                         if other_event == event or other_event == next_event:
                             continue
-
-                        # Check if this event overlaps the gap
-                        # Event overlaps if: event_start < gap_end AND event_end > gap_start
                         if other_event.start_time < gap_end and other_event.end_time > gap_start:
                             has_overlap = True
                             break
 
-                    # Only insert available slot if there's no overlap
+                    # Only create slots within the same day
                     if not has_overlap:
-                        available_event = CalendarEvent({
-                            'start': {'dateTime': event.end_time.isoformat()},
-                            'end': {'dateTime': next_event.start_time.isoformat()}
-                        }, is_available=True, core_start_hour=self.core_start_hour, core_end_hour=self.core_end_hour)
-                        new_events.append(available_event)
+                        # Determine slot type based on timing
+                        slot_start_hour = gap_start.hour
+                        slot_end_hour = gap_end.hour
 
-        # Add back all-day events at the beginning
+                        # Only create the slot if:
+                        # 1. It's during core hours (green boxes), OR
+                        # 2. It's after core hours AND there's an evening event (grey boxes)
+                        # Don't create slots that extend past core hours with no evening event
+
+                        if slot_start_hour < self.core_end_hour:
+                            # Slot starts during core hours
+                            if slot_end_hour <= self.core_end_hour:
+                                # Fully within core hours - add it (green boxes)
+                                available_event = CalendarEvent({
+                                    'start': {'dateTime': gap_start.isoformat()},
+                                    'end': {'dateTime': gap_end.isoformat()}
+                                }, is_available=True, core_start_hour=self.core_start_hour, core_end_hour=self.core_end_hour)
+                                new_events.append(available_event)
+                            else:
+                                # Spans core hours end - only add up to core_end, then grey slot to evening event
+                                # Green slot: gap_start to core_end
+                                if gap_start < core_end:
+                                    available_event = CalendarEvent({
+                                        'start': {'dateTime': gap_start.isoformat()},
+                                        'end': {'dateTime': core_end.isoformat()}
+                                    }, is_available=True, core_start_hour=self.core_start_hour, core_end_hour=self.core_end_hour)
+                                    new_events.append(available_event)
+
+                                # Grey slot: core_end to next_event (evening event)
+                                if core_end < gap_end:
+                                    available_event = CalendarEvent({
+                                        'start': {'dateTime': core_end.isoformat()},
+                                        'end': {'dateTime': gap_end.isoformat()}
+                                    }, is_available=True, core_start_hour=self.core_start_hour, core_end_hour=self.core_end_hour)
+                                    new_events.append(available_event)
+                        elif slot_start_hour >= self.core_end_hour and slot_end_hour <= 23:
+                            # After core hours, only add if there's an evening event
+                            # This is a grey slot between evening events
+                            available_event = CalendarEvent({
+                                'start': {'dateTime': gap_start.isoformat()},
+                                'end': {'dateTime': gap_end.isoformat()}
+                            }, is_available=True, core_start_hour=self.core_start_hour, core_end_hour=self.core_end_hour)
+                            new_events.append(available_event)
+
+        # Add back all-day events, events without start times, and declined events
         all_day_events = [e for e in self.events if e.is_all_day]
-        self.events = all_day_events + new_events
+        events_without_times = [e for e in self.events if not e.is_all_day and not e.start_time and not e.is_available]
+        declined_events = [e for e in self.events if e.response_status == 'declined' and e.start_time and not e.is_all_day and not e.is_available]
 
-    def draw_header(self):
-        """Draw the application header"""
+        # Merge declined events with new_events and sort by start time
+        timed_events_combined = new_events + declined_events
+        timed_events_combined.sort(key=lambda e: e.start_time if e.start_time else datetime.min.replace(tzinfo=timezone.utc))
+
+        self.events = all_day_events + events_without_times + timed_events_combined
+
+    def draw_mini_calendar(self):
+        """Draw compact 3-week calendar view on one line showing loaded dates"""
         height, width = self.stdscr.getmaxyx()
 
-        title = "📅 Interactive Calendar"
-        date_str = datetime.now().strftime("%A, %B %d, %Y")
-
-        # Determine viewing period description
-        period_str = ""
-        if self.time_filter == "today":
-            period_str = "Viewing: Today"
-        elif self.time_filter == "this_week":
-            period_str = "Viewing: This Week (Mon-Fri)"
-        elif self.time_filter == "next_week":
-            period_str = "Viewing: Next Week (Mon-Fri)"
-        elif self.time_filter == "custom" and self.time_min and self.time_max:
-            start = datetime.fromisoformat(self.time_min)
-            end = datetime.fromisoformat(self.time_max)
-            # Check if it's a single day
-            if start.date() == end.date():
-                period_str = f"Viewing: {start.strftime('%A, %B %d, %Y')}"
-            else:
-                period_str = f"Viewing: {start.strftime('%b %d')} - {end.strftime('%b %d, %Y')}"
+        # Add loading spinner to title if fetching data
+        if self.is_fetching:
+            spinner_char = self.spinner_frames[self.spinner_index]
+            self.spinner_index = (self.spinner_index + 1) % len(self.spinner_frames)
+            title = f"📅 Interactive Calendar {spinner_char}"
+        else:
+            title = "📅 Interactive Calendar"
+        date_str = self.current_view_date.strftime("%A, %B %d, %Y")
 
         self.stdscr.addstr(0, (width - len(title)) // 2, title, curses.A_BOLD)
         self.stdscr.addstr(1, (width - len(date_str)) // 2, date_str)
 
-        # Show viewing period if available
-        if period_str:
-            self.stdscr.addstr(2, (width - len(period_str)) // 2, period_str, curses.color_pair(5))
+        # Calculate week boundaries
+        now = datetime.now().astimezone()
+        today = now.date()
+
+        days_since_monday = now.weekday()
+        current_monday = now - timedelta(days=days_since_monday)
+
+        previous_monday = current_monday - timedelta(days=7)
+        next_monday = current_monday + timedelta(days=7)
+
+        # Build 3 weeks: previous, current, next (Mon-Fri only)
+        weeks = []
+        for week_start in [previous_monday, current_monday, next_monday]:
+            week_days = []
+            for i in range(5):  # Mon-Fri
+                day = week_start + timedelta(days=i)
+                week_days.append(day.date())
+            weeks.append(week_days)
+
+        # Build single-line calendar string
+        # Format: [Mo Tu We Th Fr] Mo Tu We Th Fr [Mo Tu We Th Fr]
+        #         └─ Previous ──┘ └─ Current ─┘ └── Next ──┘
+
+        start_y = 2
+
+        # Calculate total width needed and starting position
+        # Each day: 2 chars + 1 space = 3 chars per day, 5 days = 15 chars
+        # Previous week: [15] + 1 space = 16
+        # Current week: 15 + 1 space = 16
+        # Next week: [15] = 17
+        # Separators: 2 x " | " = 6
+        # Total: ~55 chars
+
+        # Start position for centered display
+        total_width = 15 + 3 + 15 + 3 + 15  # days + separators
+        start_x = max(0, (width - total_width) // 2)
+        current_x = start_x
+
+        view_date = self.current_view_date.date()
+
+        # Draw previous week with brackets
+        self.stdscr.addstr(start_y, current_x, "[", curses.color_pair(5))
+        current_x += 1
+
+        for day_date in weeks[0]:
+            self._draw_day_cell(start_y, current_x, day_date, today, view_date)
+            current_x += 3
+
+        self.stdscr.addstr(start_y, current_x - 1, "]", curses.color_pair(5))
+        current_x += 1
+
+        # Separator
+        self.stdscr.addstr(start_y, current_x, " | ", curses.color_pair(5))
+        current_x += 3
+
+        # Draw current week (no brackets)
+        for day_date in weeks[1]:
+            self._draw_day_cell(start_y, current_x, day_date, today, view_date)
+            current_x += 3
+
+        # Separator
+        self.stdscr.addstr(start_y, current_x - 1, " | ", curses.color_pair(5))
+        current_x += 2
+
+        # Draw next week with brackets
+        self.stdscr.addstr(start_y, current_x, "[", curses.color_pair(5))
+        current_x += 1
+
+        for day_date in weeks[2]:
+            self._draw_day_cell(start_y, current_x, day_date, today, view_date)
+            current_x += 3
+
+        self.stdscr.addstr(start_y, current_x - 1, "]", curses.color_pair(5))
 
         # Draw separator
         self.stdscr.addstr(3, 0, "─" * width)
 
+    def _draw_day_cell(self, y: int, x: int, day_date: date, today: date, view_date: date):
+        """Draw a single day cell in the mini calendar"""
+        is_today = (day_date == today)
+        is_loaded = day_date in self.loaded_dates
+
+        # Check if this day is in the selected view
+        is_selected = False
+        if self.display_mode == 1:
+            is_selected = (day_date == view_date)
+        elif self.display_mode == 2:
+            next_date = (self.current_view_date + timedelta(days=1)).date()
+            is_selected = (day_date == view_date or day_date == next_date)
+
+        day_abbr = day_date.strftime("%a")[:2]
+
+        # Determine color/style priority: selected > today > loaded > not loaded
+        # Selection cursor overlays the green today marker
+        if is_selected:
+            # Selected day: light grey cursor (white background) - overlays everything
+            attr = curses.color_pair(14)
+        elif is_today:
+            # Current day: GREEN background (when not selected)
+            attr = curses.color_pair(12) | curses.A_BOLD
+        elif is_loaded:
+            # Loaded day: white text
+            attr = curses.color_pair(13)
+        else:
+            # Not loaded: dim
+            attr = curses.color_pair(5) | curses.A_DIM
+
+        self.stdscr.addstr(y, x, day_abbr, attr)
+
+    def draw_header(self):
+        """Draw the application header (now using mini calendar)"""
+        self.draw_mini_calendar()
+
     def draw_table_header(self, start_y: int):
         """Draw the table header"""
         # Format: Day | Time | Event | 📬 | Attendees | Meet Link
-        header = f"{'Day':<4} │ {'Time':<23} │ {'Event':<35} │ {'📬':<4} │ {'Attendees':<14} │ {'Meet Link':<30}"
+        header = f"{'Day':<4} │ {'Time':<11} │ {'Event':<35} │ {'📬':<4} │ {'Attendees':<14} │ {'Meet Link':<30}"
         self.stdscr.addstr(start_y, 1, header, curses.A_BOLD | curses.A_UNDERLINE)
 
     def draw_event_row(self, y: int, event: CalendarEvent, is_selected: bool, row_num: int, available_count: int):
@@ -652,12 +977,12 @@ class CalendarTUI:
         # Format time
         time_str = ""
         if event.is_all_day:
-            # Emoji takes 2 cells, so we pad to 22 instead of 23 to account for it
-            time_str = "📅 All Day".ljust(22)
+            # Emoji takes 2 cells, so we pad to 10 instead of 11 to account for it
+            time_str = "📅 All Day".ljust(10)
         elif event.start_time and event.end_time:
-            start = event.start_time.strftime('%I:%M %p').lstrip('0')
-            end = event.end_time.strftime('%I:%M %p').lstrip('0')
-            time_str = f"{start} - {end}".ljust(23)
+            start = event.start_time.strftime('%H:%M')
+            end = event.end_time.strftime('%H:%M')
+            time_str = f"{start}-{end}".ljust(11)
 
         # Get event title with clock emoji prefix for currently active events
         # Emoji is 2 chars wide, so adjust title length accordingly
@@ -707,9 +1032,12 @@ class CalendarTUI:
             if event.is_available:
                 # Check if available slot is outside core hours
                 if event.start_time and event.end_time:
-                    start_hour = event.start_time.hour
-                    end_hour = event.end_time.hour
-                    is_outside_core = (end_hour <= self.core_start_hour or start_hour >= self.core_end_hour)
+                    # Create core hours boundaries for comparison (same logic as _generate_available_summary)
+                    core_start = event.start_time.replace(hour=self.core_start_hour, minute=0, second=0, microsecond=0)
+                    core_end = event.start_time.replace(hour=self.core_end_hour, minute=0, second=0, microsecond=0)
+
+                    # A slot is outside core if it ends before core starts OR starts after core ends
+                    is_outside_core = (event.end_time <= core_start or event.start_time >= core_end)
 
                     if is_outside_core:
                         # Out of hours: dark grey (dimmed)
@@ -765,8 +1093,8 @@ class CalendarTUI:
             self.stdscr.addstr(y, 1, row_text_no_link[:width-2], attr)
 
             # Draw link - blue if not selected, highlighted color if selected
-            # Calculate link position: 1(margin) + 4(Day) + 3(│) + 23(Time) + 3(│) + 35(Event) + 3(│) + 4(Status) + 3(│) + 14(Attendees) + 3(│) = 96
-            link_x = 96
+            # Calculate link position: 1(margin) + 4(Day) + 3(│) + 11(Time) + 3(│) + 35(Event) + 3(│) + 4(Status) + 3(│) + 14(Attendees) + 3(│) = 84
+            link_x = 84
 
             # Display the meeting ID (e.g., "kmv-cnxe-buy") instead of full URL
             # This is much shorter (12-15 chars) and won't be truncated
@@ -787,9 +1115,12 @@ class CalendarTUI:
             pass
 
     def draw_events(self, start_y: int):
-        """Draw all events and recommendations"""
+        """Draw all events filtered by display mode"""
         height, width = self.stdscr.getmaxyx()
         max_rows = height - start_y - 4
+
+        # Get filtered events based on display mode
+        filtered_events = self.get_filtered_events()
 
         # Track row numbers and available slot counts
         row_num = 1
@@ -797,9 +1128,8 @@ class CalendarTUI:
         current_y = start_y
 
         # Draw events
-        for i, event in enumerate(self.events[self.scroll_offset:self.scroll_offset + max_rows]):
+        for i, event in enumerate(filtered_events[self.scroll_offset:self.scroll_offset + max_rows]):
             actual_index = i + self.scroll_offset
-            # Selection is always active (recommendations are displayed inline, not as a mode)
             is_selected = actual_index == self.current_row
 
             # Calculate proper row number
@@ -818,53 +1148,6 @@ class CalendarTUI:
                 current_available if event.is_available else 0
             )
             current_y += 1
-
-        # Draw recommendations if available (max 2 lines each, no selection)
-        if self.show_recommendations:
-            # Add blank line
-            if current_y < height - 4:
-                current_y += 1
-
-            # Draw recommendation header
-            if current_y < height - 4:
-                try:
-                    self.stdscr.addstr(current_y, 1, "Recommendations:", curses.A_BOLD)
-                    current_y += 1
-                except curses.error:
-                    pass
-
-            # Draw recommendations or "no recommendations" message
-            if self.recommendations_list:
-                # Draw each recommendation (2 lines max, with bullet points)
-                for rec in self.recommendations_list:
-                    if current_y >= height - 4:
-                        break
-
-                    try:
-                        # Line 1: Bullet + Action line (e.g., "• 1. DECLINE: Meeting Title")
-                        line1 = rec.get('line1', '')
-                        if line1:
-                            # Add bullet point
-                            bullet_line = f"• {line1}"[:width-4]
-                            self.stdscr.addstr(current_y, 2, bullet_line, curses.A_NORMAL)
-                            current_y += 1
-
-                        # Line 2: Reason/details (if present, indented)
-                        line2 = rec.get('line2', '')
-                        if line2 and current_y < height - 4:
-                            # Add extra indent for second line
-                            indented_line = f"  {line2}"[:width-4]
-                            self.stdscr.addstr(current_y, 2, indented_line, curses.color_pair(5))  # Dimmed color
-                            current_y += 1
-                    except curses.error:
-                        pass
-            else:
-                # No recommendations found
-                if current_y < height - 4:
-                    try:
-                        self.stdscr.addstr(current_y, 2, "No recommendations - schedule looks good!", curses.color_pair(5))
-                    except curses.error:
-                        pass
 
     def draw_attendee_details(self):
         """Draw attendee details overlay for selected event"""
@@ -1050,10 +1333,11 @@ class CalendarTUI:
         """Draw the footer with help text"""
         height, width = self.stdscr.getmaxyx()
 
-        help_text = "↑/↓: Navigate | ←/→: Prev/Next Period | Enter: Attendees | a: Accept | t: Tentative | d: Decline/Delete | f: Focus | r: Refresh | q: Quit"
+        help_text = "↑/↓: Navigate | ←/→: Prev/Next Day | 1: Single Day | 2: Two Days | Enter: Attendees | a: Accept | t: Tentative | d: Decline/Delete | -: Toggle Declined | f: Focus | q: Quit"
 
-        # Status legend
-        legend = "Status: ✅ Accepted | ⏳ Maybe/Tentative | ❓ No Response | 🎧 Focus time | ⚠️  Conflict"
+        # Status legend with declined toggle indicator
+        declined_status = "👁️ Shown" if self.show_declined_locally else "🙈 Hidden"
+        legend = f"Status: ✅ Accepted | ⏳ Maybe/Tentative | ❓ No Response | 🎧 Focus time | ⚠️  Conflict | Declined: {declined_status}"
 
         # Add debug indicator to legend if debug mode is enabled
         if self.debug:
@@ -1088,6 +1372,22 @@ class CalendarTUI:
         except curses.error:
             pass
 
+    def set_loading_status(self, message: str):
+        """Set status message and immediately refresh to show loading state"""
+        self.status_message = message
+        self.is_fetching = True
+        # Force immediate screen update to show the loading message
+        try:
+            self.draw()
+        except:
+            pass  # Ignore any drawing errors during update
+
+    def clear_loading_status(self, message: str = ""):
+        """Clear loading state and optionally set completion message"""
+        self.is_fetching = False
+        if message:
+            self.status_message = message
+
     def draw(self):
         """Draw the entire UI"""
         self.stdscr.clear()
@@ -1105,6 +1405,9 @@ class CalendarTUI:
 
     def handle_navigation(self, key: int):
         """Handle up/down navigation"""
+        filtered_events = self.get_filtered_events()
+        max_row = len(filtered_events) - 1
+
         if key == curses.KEY_UP:
             if self.current_row > 0:
                 self.current_row -= 1
@@ -1116,7 +1419,7 @@ class CalendarTUI:
                     self.scroll_offset = self.current_row
 
         elif key == curses.KEY_DOWN:
-            if self.current_row < len(self.events) - 1:
+            if self.current_row < max_row:
                 self.current_row += 1
 
                 # Adjust scroll offset if needed
@@ -1126,12 +1429,13 @@ class CalendarTUI:
                     self.scroll_offset = self.current_row - max_rows + 1
 
     async def delete_focus_time(self):
-        """Delete a focus time event"""
-        if not self.events or self.current_row >= len(self.events):
+        """Delete a focus time event (optimistic update)"""
+        filtered_events = self.get_filtered_events()
+        if not filtered_events or self.current_row >= len(filtered_events):
             self.status_message = "No event selected"
             return
 
-        event = self.events[self.current_row]
+        event = filtered_events[self.current_row]
 
         # Check if it's a focus time event
         if event.event_type != 'focusTime':
@@ -1142,247 +1446,234 @@ class CalendarTUI:
             self.status_message = "Event has no ID, cannot delete"
             return
 
+        # Optimistic update: Remove from local state immediately
+        event_id = event.id
+        self.events = [e for e in self.events if e.id != event_id]
+        self._insert_available_slots()
+        self.status_message = "✅ Focus time deleted"
+
+        # Async: Delete on server in background
+        asyncio.create_task(self._delete_event_background(event_id))
+
+    async def _delete_event_background(self, event_id: str):
+        """Background task to delete event on server"""
         try:
-            self.debug_log(f"Deleting focus time event: {event.id}")
+            params = {"event_id": event_id, "send_notifications": False}
+            self.debug_log(f"Background: Deleting event: {event_id}")
+            result = await self.mcp_client.call_tool("delete_event", params)
 
-            # Call MCP delete_event tool
-            result = await self.mcp_client.call_tool(
-                "delete_event",
-                {
-                    "event_id": event.id,
-                    "send_notifications": False
-                }
-            )
-
-            self.debug_log(f"Delete result: {result}")
-
-            # Check if result contains an error
             if isinstance(result, str) and ("Error:" in result or "error" in result.lower()):
-                self.status_message = f"❌ Failed to delete: {result[:100]}"
-                self.debug_log(f"MCP returned error: {result}")
+                self.status_message = f"❌ Delete failed, reloading"
+                self.debug_log(f"Delete error: {result}")
+                await self._reload_current_day()
             else:
-                self.status_message = "✅ Focus time deleted"
-                # Refresh events to show the deletion
-                await self.fetch_events(self.time_filter, self.time_min, self.time_max)
-
+                self.debug_log("Background: Delete successful, reloading to sync and recalculate available slots")
+                # Reload to sync server state and recalculate available slots
+                await self._reload_current_day()
         except Exception as e:
-            import traceback
-            tb = traceback.format_exc()
-            self.status_message = f"❌ Error deleting: {str(e)}"
-            self.debug_log(f"ERROR deleting focus time: {tb}")
-            import sys
-            print(f"\n[ERROR] Failed to delete focus time:\n{tb}", file=sys.stderr, flush=True)
+            self.status_message = f"❌ Delete failed, reloading"
+            self.debug_log(f"Delete exception: {e}")
+            await self._reload_current_day()
 
-    async def handle_rsvp(self, response: str):
-        """Handle RSVP response (accept/tentative/decline)"""
-        if not self.events or self.current_row >= len(self.events):
+    async def _reload_current_day(self):
+        """Reload just the current view day's data"""
+        try:
+            view_date = self.current_view_date
+            start_of_day = view_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_of_day = view_date.replace(hour=23, minute=59, second=59, microsecond=0)
+
+            await self._fetch_week_range(start_of_day, end_of_day, replace=True)
+            self.draw()
+        except Exception as e:
+            self.debug_log(f"Error reloading current day: {e}")
+
+    async def _reload_event_day(self, event_date):
+        """Reload the specific day an event is on"""
+        if not event_date:
+            self.debug_log("No event date provided, reloading current day instead")
+            await self._reload_current_day()
             return
 
-        event = self.events[self.current_row]
-
         try:
-            # Call MCP edit_event tool
-            # First, need to update attendee response status
+            # Convert date to datetime for the API call
+            from datetime import datetime
+            event_datetime = datetime.combine(event_date, datetime.min.time())
+            start_of_day = event_datetime.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_of_day = event_datetime.replace(hour=23, minute=59, second=59, microsecond=0)
+
+            self.debug_log(f"Reloading events for {event_date}")
+            await self._fetch_week_range(start_of_day, end_of_day, replace=True)
+            self.draw()
+        except Exception as e:
+            self.debug_log(f"Error reloading event day {event_date}: {e}")
+
+    async def handle_rsvp(self, response: str):
+        """Handle RSVP response (accept/tentative/decline) with optimistic update"""
+        filtered_events = self.get_filtered_events()
+        if not filtered_events or self.current_row >= len(filtered_events):
+            return
+
+        event = filtered_events[self.current_row]
+
+        # Store event date for reloading the correct day later
+        event_date = event.start_time.date() if event.start_time else None
+
+        # Optimistic update: Update local state immediately
+        event_id = event.id
+        for e in self.events:
+            if e.id == event_id:
+                # Update the response status locally
+                if response == 'accepted':
+                    e.response_status = 'accepted'
+                    self.status_message = "✅ Event accepted"
+                elif response == 'tentative':
+                    e.response_status = 'tentative'
+                    self.status_message = "✅ Event tentative"
+                elif response == 'declined':
+                    e.response_status = 'declined'
+                    self.status_message = "✅ Event declined"
+                break
+
+        # Async: Update on server in background, pass event date for reloading
+        asyncio.create_task(self._update_rsvp_background(event_id, response, event_date))
+
+    async def _update_rsvp_background(self, event_id: str, response: str, event_date):
+        """Background task to update RSVP on server - single event only"""
+        try:
+            # Find the event in our local state to get attendees
+            event = None
+            for e in self.events:
+                if e.id == event_id:
+                    event = e
+                    break
+
+            if not event:
+                self.debug_log(f"Event {event_id} not found for RSVP update")
+                return
+
+            # Build attendees list with updated response - SINGLE EVENT ONLY
             attendees = []
             for attendee in event.attendees:
                 attendee_data = {"email": attendee.get('email')}
                 if attendee.get('self', False):
+                    # Only update this one event's response
                     attendee_data["response_status"] = response
                 else:
+                    # Preserve other attendees' status unchanged
                     attendee_data["response_status"] = attendee.get('responseStatus', 'needsAction')
                 attendees.append(attendee_data)
 
-            await self.mcp_client.call_tool(
+            self.debug_log(f"Background: Updating RSVP for single event {event_id} to {response}")
+            result = await self.mcp_client.call_tool(
                 "edit_event",
                 {
-                    "event_id": event.id,
+                    "event_id": event_id,
                     "attendees": attendees,
                     "send_notifications": False
                 }
             )
 
-            event.response_status = response
-            self.status_message = f"Event {response}!"
+            if isinstance(result, str) and ("Error:" in result or "error" in result.lower()):
+                self.status_message = f"❌ RSVP update failed, reloading"
+                self.debug_log(f"RSVP error: {result}")
+                await self._reload_event_day(event_date)
+            else:
+                self.debug_log("Background: RSVP update successful, reloading to hide/show events")
+                # Reload the specific day this event is on to hide declined events (show_declined=False)
+                await self._reload_event_day(event_date)
 
         except Exception as e:
-            self.status_message = f"Error: {str(e)}"
+            self.status_message = f"❌ RSVP update failed, reloading"
+            self.debug_log(f"RSVP exception: {e}")
+            await self._reload_event_day(event_date)
 
     async def create_focus_time(self):
-        """Create a focus time block from the selected available slot, or all core hours slots if not on available"""
-        try:
-            self.debug_log("=== create_focus_time() called ===")
+        """Create a focus time block from the selected available slot with optimistic update"""
+        self.debug_log("=== create_focus_time() called ===")
 
-            # Check if we have events
-            if not self.events:
-                self.status_message = "No events loaded"
-                self.debug_log("No events loaded")
-                return
-
-            # Check if current selection is an available slot
-            current_event = None
-            if self.current_row < len(self.events):
-                current_event = self.events[self.current_row]
-                self.debug_log(f"Selected event: is_available={current_event.is_available}, summary='{current_event.summary}'")
-
-            # If current selection is available, create focus time for just that slot
-            if current_event and current_event.is_available:
-                self.debug_log("Creating focus time for single available slot")
-                await self._create_single_focus_time(current_event)
-            else:
-                # Create focus time for ALL available slots during core hours
-                self.debug_log("Creating focus time for all available core hours slots")
-                await self._create_bulk_focus_time()
-
-        except Exception as e:
-            import traceback
-            tb = traceback.format_exc()
-            self.debug_log(f"ERROR creating focus time: {tb}")
-            # Always print errors to stderr for visibility
-            import sys
-            print(f"\n[ERROR] Failed to create focus time:\n{tb}", file=sys.stderr, flush=True)
-            # Re-raise so run_with_spinner can handle the error message
-            raise
-
-    async def _create_single_focus_time(self, event):
-        """Create focus time for a single available slot"""
-        # Use the available slot's time range
-        start_time = event.start_time
-        end_time = event.end_time
-        self.debug_log(f"Time range: {start_time} to {end_time}")
-
-        if not start_time or not end_time:
-            self.status_message = "Invalid time range for available slot"
-            self.debug_log("Invalid time range: start_time or end_time is None")
+        # Check if we have events
+        if not self.events:
+            self.status_message = "No events loaded"
+            self.debug_log("No events loaded")
             return
 
-        # Calculate duration in minutes
-        duration_minutes = (end_time - start_time).total_seconds() / 60
-        self.debug_log(f"Duration: {duration_minutes} minutes")
+        # Check if current selection is an available slot (use filtered events!)
+        filtered_events = self.get_filtered_events()
+        current_event = None
+        if self.current_row < len(filtered_events):
+            current_event = filtered_events[self.current_row]
+            self.debug_log(f"Selected event: is_available={current_event.is_available}, summary='{current_event.summary}'")
 
-        # Set title based on duration
+        # Only create focus time if on an available slot
+        if current_event and current_event.is_available:
+            self.debug_log("Creating focus time for single available slot - optimistic update")
+            self._optimistic_create_single_focus_time(current_event)
+            # Background API call
+            asyncio.create_task(self._create_single_focus_time_background(current_event))
+        else:
+            self.status_message = "❌ Select an available time slot first (press 'f' on green boxes)"
+            self.debug_log("No available slot selected")
+
+    def _optimistic_create_single_focus_time(self, available_slot):
+        """Optimistically create focus time locally (instant UI update)"""
+        start_time = available_slot.start_time
+        end_time = available_slot.end_time
+
+        if not start_time or not end_time:
+            return
+
+        # Calculate duration and title
+        duration_minutes = (end_time - start_time).total_seconds() / 60
         if duration_minutes <= 40:
             title = "Paperwork - Focus time"
         else:
             title = "Development - Focus time"
-        self.debug_log(f"Title: '{title}'")
 
-        # Format times with timezone (use isoformat to preserve timezone offset)
-        start_str = start_time.isoformat()
-        end_str = end_time.isoformat()
+        # Create a temporary focus time event
+        focus_event = CalendarEvent({
+            'id': f'temp-focus-{int(start_time.timestamp())}',  # Temporary ID
+            'summary': title,
+            'start': {'dateTime': start_time.isoformat()},
+            'end': {'dateTime': end_time.isoformat()},
+            'status': 'confirmed',
+            'eventType': 'focusTime',
+            'colorId': '5',  # Yellow
+            'focusTimeProperties': {
+                'autoDeclineMode': 'declineOnlyNewConflictingInvitations',
+                'chatStatus': 'doNotDisturb'
+            }
+        }, core_start_hour=self.core_start_hour, core_end_hour=self.core_end_hour)
 
-        # Extract timezone from the start_time object
-        event_timezone = str(start_time.tzinfo) if start_time.tzinfo else self.timezone
-        self.debug_log(f"Formatted times: start={start_str}, end={end_str}, event_timezone={event_timezone}")
+        # Remove the available slot and add the focus time event
+        # Find and remove the available slot
+        for i, e in enumerate(self.events):
+            if e == available_slot:
+                self.events.pop(i)
+                break
 
-        # Prepare arguments
-        args = {
-            "summary": title,
-            "start_time": start_str,
-            "end_time": end_str,
-            "eventType": "focusTime",
-            "timezone": self.timezone,
-            "colorId": "5",  # Yellow in Google Calendar
-            "focusTimeProperties": {
-                "autoDeclineMode": "declineOnlyNewConflictingInvitations",
-                "chatStatus": "doNotDisturb"
-            },
-            "send_notifications": False
-        }
-        self.debug_log(f"MCP call arguments: {args}")
+        # Add the focus time event
+        self.events.append(focus_event)
 
-        # Call MCP create_event tool
-        self.debug_log("Calling MCP create_event tool...")
-        result = await self.mcp_client.call_tool("create_event", args)
-        self.debug_log(f"MCP result: {result}")
+        # Re-insert available slots to recalculate gaps
+        self._insert_available_slots()
 
-        # Check if result contains an error
-        if isinstance(result, str) and ("Error:" in result or "error" in result.lower()):
-            self.debug_log(f"MCP returned error: {result}")
-            self.status_message = f"❌ Failed: {result[:100]}"
-            return
+        # Set status message
+        self.status_message = f"✅ Creating {int(duration_minutes)}min {title}..."
+        self.debug_log(f"Optimistic: Added temp focus time event, removed available slot")
 
-        self.debug_log("Focus time created successfully, refreshing events...")
-        await self.fetch_events(self.time_filter, self.time_min, self.time_max)
-        self.debug_log("Events refreshed")
-        self.status_message = f"✅ Created {int(duration_minutes)}min {title}"
+    async def _create_single_focus_time_background(self, available_slot):
+        """Background task to create focus time on server"""
+        try:
+            start_time = available_slot.start_time
+            end_time = available_slot.end_time
 
-    async def _create_bulk_focus_time(self):
-        """Create focus time for all available slots during core hours, including gaps before/after events"""
-        # Find all available slots during core hours (9am-5pm)
-        core_available_slots = []
+            if not start_time or not end_time:
+                self.debug_log("Background: Invalid time range")
+                await self._reload_current_day()
+                return
 
-        for event in self.events:
-            if not event.is_available:
-                continue
-
-            if not event.start_time or not event.end_time:
-                continue
-
-            # Check if slot is during core hours
-            start_hour = event.start_time.hour
-            end_hour = event.end_time.hour
-
-            # Slot must be fully within core hours (9am-5pm)
-            if start_hour >= self.core_start_hour and end_hour <= self.core_end_hour:
-                core_available_slots.append(event)
-                self.debug_log(f"Found core hours slot: {event.start_time} to {event.end_time}")
-
-        # Also check for gaps at the beginning and end of the work day
-        # Get all timed events (not just available slots) for today
-        timed_events = [e for e in self.events if not e.is_all_day and e.start_time and not e.is_available]
-
-        if timed_events:
-            # Sort by start time
-            timed_events.sort(key=lambda e: e.start_time)
-
-            # Get the date we're working with (use first timed event's date)
-            work_date = timed_events[0].start_time.date()
-            core_start = datetime.combine(work_date, datetime.min.time().replace(hour=self.core_start_hour))
-            core_start = core_start.replace(tzinfo=timed_events[0].start_time.tzinfo)
-            core_end = datetime.combine(work_date, datetime.min.time().replace(hour=self.core_end_hour))
-            core_end = core_end.replace(tzinfo=timed_events[0].start_time.tzinfo)
-
-            # Check for gap before first event (9am to first event start)
-            first_event = timed_events[0]
-            if first_event.start_time > core_start:
-                gap_minutes = (first_event.start_time - core_start).total_seconds() / 60
-                if gap_minutes >= 30:
-                    self.debug_log(f"Found gap before first event: {core_start} to {first_event.start_time} ({gap_minutes} min)")
-                    # Create a pseudo-available slot for this gap
-                    gap_slot = CalendarEvent({
-                        'start': {'dateTime': core_start.isoformat()},
-                        'end': {'dateTime': first_event.start_time.isoformat()}
-                    }, is_available=True)
-                    core_available_slots.append(gap_slot)
-
-            # Check for gap after last event (last event end to 5pm)
-            last_event = timed_events[-1]
-            if last_event.end_time and last_event.end_time < core_end:
-                gap_minutes = (core_end - last_event.end_time).total_seconds() / 60
-                if gap_minutes >= 30:
-                    self.debug_log(f"Found gap after last event: {last_event.end_time} to {core_end} ({gap_minutes} min)")
-                    # Create a pseudo-available slot for this gap
-                    gap_slot = CalendarEvent({
-                        'start': {'dateTime': last_event.end_time.isoformat()},
-                        'end': {'dateTime': core_end.isoformat()}
-                    }, is_available=True)
-                    core_available_slots.append(gap_slot)
-
-        if not core_available_slots:
-            self.status_message = "No available slots during core hours (9am-5pm)"
-            self.debug_log("No available slots found during core hours")
-            return
-
-        self.debug_log(f"Creating focus time for {len(core_available_slots)} available slots")
-
-        # Create focus time for each slot
-        created_count = 0
-        failed_count = 0
-
-        for slot in core_available_slots:
-            duration_minutes = (slot.end_time - slot.start_time).total_seconds() / 60
-
-            # Set title based on duration
+            # Calculate duration and title
+            duration_minutes = (end_time - start_time).total_seconds() / 60
             if duration_minutes <= 40:
                 title = "Paperwork - Focus time"
             else:
@@ -1391,11 +1682,11 @@ class CalendarTUI:
             # Prepare arguments
             args = {
                 "summary": title,
-                "start_time": slot.start_time.isoformat(),
-                "end_time": slot.end_time.isoformat(),
+                "start_time": start_time.isoformat(),
+                "end_time": end_time.isoformat(),
                 "eventType": "focusTime",
                 "timezone": self.timezone,
-                "colorId": "5",  # Yellow in Google Calendar
+                "colorId": "5",
                 "focusTimeProperties": {
                     "autoDeclineMode": "declineOnlyNewConflictingInvitations",
                     "chatStatus": "doNotDisturb"
@@ -1403,292 +1694,327 @@ class CalendarTUI:
                 "send_notifications": False
             }
 
-            # Call MCP create_event tool
-            try:
-                result = await self.mcp_client.call_tool("create_event", args)
+            self.debug_log(f"Background: Creating focus time via API...")
+            result = await self.mcp_client.call_tool("create_event", args)
 
-                # Check if result contains an error
-                if isinstance(result, str) and ("Error:" in result or "error" in result.lower()):
-                    self.debug_log(f"Failed to create focus time for slot {slot.start_time}: {result}")
-                    failed_count += 1
-                else:
-                    self.debug_log(f"Created focus time for slot {slot.start_time}")
-                    created_count += 1
-            except Exception as e:
-                self.debug_log(f"Exception creating focus time for slot {slot.start_time}: {e}")
-                failed_count += 1
+            # Check if result contains an error
+            if isinstance(result, str) and ("Error:" in result or "error" in result.lower()):
+                self.debug_log(f"Background: API error: {result}")
+                self.status_message = f"❌ Focus time creation failed, reloading"
+                await self._reload_current_day()
+            else:
+                self.debug_log("Background: Focus time created successfully, reloading to get real event ID")
+                self.status_message = f"✅ Created {int(duration_minutes)}min {title}"
+                # Reload to replace temp event ID with real server ID
+                await self._reload_current_day()
 
-        # Refresh events to show new focus times
-        await self.fetch_events(self.time_filter, self.time_min, self.time_max)
+        except Exception as e:
+            self.debug_log(f"Background: Exception creating focus time: {e}")
+            self.status_message = f"❌ Focus time creation failed, reloading"
+            await self._reload_current_day()
 
-        # Set status message
-        if created_count > 0 and failed_count == 0:
-            self.status_message = f"✅ Created {created_count} focus time blocks"
-        elif created_count > 0 and failed_count > 0:
-            self.status_message = f"⚠️ Created {created_count}, failed {failed_count}"
-        else:
-            self.status_message = f"❌ Failed to create focus times"
-
-    def navigate_time_period(self, direction: int):
-        """Navigate to previous (-1) or next (1) time period
+    def navigate_to_weekday(self, direction: int):
+        """Navigate to previous (-1) or next (1) weekday, skipping weekends
 
         Args:
-            direction: -1 for previous, 1 for next
+            direction: -1 for previous weekday, 1 for next weekday
         """
-        if self.time_filter == "today":
-            # Navigate day by day
-            now = datetime.now().astimezone()
-            target_date = now + timedelta(days=direction)
-            start_of_day = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
-            end_of_day = target_date.replace(hour=23, minute=59, second=59, microsecond=0)
-            self.time_filter = "custom"
-            self.time_min = start_of_day.isoformat()
-            self.time_max = end_of_day.isoformat()
+        target_date = self.current_view_date + timedelta(days=direction)
 
-        elif self.time_filter == "this_week":
-            # Navigate week by week
-            if direction == -1:
-                # Go to previous week (Mon-Fri)
-                now = datetime.now().astimezone()
-                # Find last week's Monday
-                days_since_monday = now.weekday()
-                last_monday = now - timedelta(days=days_since_monday + 7)
-                start_of_week = last_monday.replace(hour=0, minute=0, second=0, microsecond=0)
-                end_of_week = (last_monday + timedelta(days=4)).replace(hour=23, minute=59, second=59, microsecond=0)
-                self.time_filter = "custom"
-                self.time_min = start_of_week.isoformat()
-                self.time_max = end_of_week.isoformat()
-            else:
-                # Go to next week
-                self.time_filter = "next_week"
-                self.time_min = None
-                self.time_max = None
+        # Skip weekends
+        while target_date.weekday() >= 5:  # 5 = Saturday, 6 = Sunday
+            target_date += timedelta(days=direction)
 
-        elif self.time_filter == "next_week":
-            # Navigate week by week
-            if direction == -1:
-                # Go to this week
-                self.time_filter = "this_week"
-                self.time_min = None
-                self.time_max = None
-            else:
-                # Go to week after next (Mon-Fri)
-                now = datetime.now().astimezone()
-                # Find next week's Monday
-                days_until_monday = (7 - now.weekday()) % 7
-                if days_until_monday == 0:
-                    days_until_monday = 7
-                next_monday = now + timedelta(days=days_until_monday)
-                # Add another week
-                week_after_monday = next_monday + timedelta(days=7)
-                start_of_week = week_after_monday.replace(hour=0, minute=0, second=0, microsecond=0)
-                end_of_week = (week_after_monday + timedelta(days=4)).replace(hour=23, minute=59, second=59, microsecond=0)
-                self.time_filter = "custom"
-                self.time_min = start_of_week.isoformat()
-                self.time_max = end_of_week.isoformat()
+        self.current_view_date = target_date
 
-        elif self.time_filter == "custom" and self.time_min and self.time_max:
-            # Navigate by the duration of the current range
-            start = datetime.fromisoformat(self.time_min)
-            end = datetime.fromisoformat(self.time_max)
-            duration = end - start
+        # Check if we need to refetch data (if target is outside loaded range)
+        if self.time_min and self.time_max:
+            range_start = datetime.fromisoformat(self.time_min)
+            range_end = datetime.fromisoformat(self.time_max)
 
-            new_start = start + (duration * direction)
-            new_end = end + (duration * direction)
+            # Convert to dates for comparison (ignore time component)
+            target_date_only = target_date.date()
+            range_start_date = range_start.date()
+            range_end_date = range_end.date()
 
-            self.time_min = new_start.isoformat()
-            self.time_max = new_end.isoformat()
+            # Only refetch if target is actually outside the loaded range
+            # Add a 1-day buffer: refetch if we're going beyond loaded data
+            if target_date_only < range_start_date or target_date_only > range_end_date:
+                self.debug_log(f"Target date {target_date_only} is outside loaded range {range_start_date} to {range_end_date}")
+                return True
 
-    def start_recommendations_analysis(self):
-        """Start background task to get recommendations"""
-        # Cancel any existing task before starting a new one
-        # This ensures we always analyze the CURRENT view, not a previous one
-        if self.recommendations_task and not self.recommendations_task.done():
-            self.debug_log("Cancelling previous recommendations task")
-            self.recommendations_task.cancel()
+        return False
 
-        # Start new task
-        self.recommendations_task = asyncio.create_task(self.get_recommendations())
-        self.start_loading("Analyzing calendar...")
-        # Clear previous recommendations while new analysis runs
-        self.show_recommendations = False
-        self.recommendations_list = []
+    async def _fetch_week_range(self, start_date: datetime, end_date: datetime, replace: bool = False) -> bool:
+        """Fetch events for a specific date range and merge with existing events
 
-    async def get_recommendations(self):
-        """Get calendar recommendations from Claude Code via /recommend slash command"""
+        Args:
+            start_date: Start of date range
+            end_date: End of date range
+            replace: If True, replace events in range (for reloads). If False, merge (for background fetch)
+        """
         try:
-            self.debug_log("=== get_recommendations() called ===")
-            self.debug_log(f"CWD: /home/jpacker/workspace_git/gcal-mcp-server")
+            params = {
+                "time_filter": "custom",
+                "time_min": start_date.isoformat(),
+                "time_max": end_date.isoformat(),
+                "timezone": self.timezone,
+                "detect_overlaps": True,
+                "show_declined": True,  # Always fetch declined events for toggle visibility
+                "max_results": 250,
+                "output_format": "json"
+            }
 
-            # Serialize current events to JSON (exclude available slots)
-            events_data = []
-            overlap_count = 0
+            result = await self.mcp_client.call_tool("list_events", params)
+
+            # Parse the JSON result
+            if isinstance(result, str):
+                data = json.loads(result)
+            else:
+                data = result
+
+            events_list = data.get('events', [])
+            new_events = [CalendarEvent(e, core_start_hour=self.core_start_hour, core_end_hour=self.core_end_hour) for e in events_list]
+
+            # Filter out all-day events that started before today
+            today = datetime.now().date()
+            filtered_new_events = []
+            for event in new_events:
+                if event.is_all_day and event.start_time:
+                    event_date = event.start_time.date()
+                    if event_date < today:
+                        continue
+                filtered_new_events.append(event)
+
+            if replace:
+                # REPLACE mode: Remove all existing events in range, then add new ones
+                # This ensures temp events (like temp-focus-*) get replaced by real server events
+                def event_in_range(event, range_start, range_end):
+                    if not event.start_time:
+                        return False
+                    # Check if event starts within the reload range
+                    return range_start <= event.start_time < range_end
+
+                # Keep only events outside the reload range
+                self.events = [e for e in self.events if not event_in_range(e, start_date, end_date)]
+
+                # Add all new events from server
+                self.events.extend(filtered_new_events)
+            else:
+                # MERGE mode: Add new events, avoiding duplicates by ID
+                # Used for background fetch to accumulate data from multiple weeks
+                existing_ids = {e.id for e in self.events if e.id}
+                for event in filtered_new_events:
+                    if event.id and event.id not in existing_ids:
+                        self.events.append(event)
+                        existing_ids.add(event.id)
+
+            # Client-side filter: Remove conflicts involving declined events
+            # Declined events should NEVER cause conflicts, regardless of toggle state
+            declined_ids = {e.id for e in self.events if e.response_status == 'declined'}
             for event in self.events:
-                if event.is_available:
-                    continue  # Skip available slots
+                if event.response_status == 'declined':
+                    # Declined events themselves have no conflicts
+                    event.has_overlap = False
+                    event.overlapping_event_ids = []
+                elif event.has_overlap and event.overlapping_event_ids:
+                    # Remove declined event IDs from overlap list
+                    event.overlapping_event_ids = [
+                        eid for eid in event.overlapping_event_ids if eid not in declined_ids
+                    ]
+                    # If no overlaps remain, clear the flag
+                    if not event.overlapping_event_ids:
+                        event.has_overlap = False
 
-                # Build event data matching Google Calendar API format
-                event_dict = {
-                    'id': event.id,
-                    'summary': event.summary,
-                    'start': event.start,
-                    'end': event.end,
-                    'status': event.status,
-                    'eventType': event.event_type,
-                    'attendees': event.attendees,
-                    'has_overlap': event.has_overlap,
-                    'overlapping_event_ids': event.overlapping_event_ids
-                }
-                events_data.append(event_dict)
+            # Re-insert available slots
+            self._insert_available_slots()
 
-                # Count overlaps for debugging
-                if event.has_overlap:
-                    overlap_count += 1
-                    self.debug_log(f"  Overlap: {event.summary} conflicts with {event.overlapping_event_ids}")
+            # Update the overall time range FIRST
+            if self.time_min:
+                current_min = datetime.fromisoformat(self.time_min)
+                if start_date < current_min:
+                    self.time_min = start_date.isoformat()
+            else:
+                self.time_min = start_date.isoformat()
 
-            # Write events to a temporary file
-            import tempfile
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-                json.dump({'events': events_data, 'count': len(events_data)}, f, indent=2)
-                events_file = f.name
+            if self.time_max:
+                current_max = datetime.fromisoformat(self.time_max)
+                if end_date > current_max:
+                    self.time_max = end_date.isoformat()
+            else:
+                self.time_max = end_date.isoformat()
 
-            self.debug_log(f"Serialized {len(events_data)} events to {events_file}")
-            self.debug_log(f"Found {overlap_count} events with overlaps")
-            self.debug_log(f"Temp file path: {events_file} (will be kept for inspection)")
+            # Update loaded dates for mini calendar AFTER updating time range
+            self._update_loaded_dates()
 
-            # Pass the file path to Claude
-            prompt_arg = f"Analyze the events in {events_file} and provide recommendations"
-            self.debug_log(f"Command: ['claude', '/recommend', '{prompt_arg}']")
+            return True
 
-            # Use asyncio subprocess to avoid blocking the event loop
-            # This allows the spinner to keep rotating while Claude thinks
-            self.debug_log("Starting subprocess...")
-            process = await asyncio.create_subprocess_exec(
-                'claude', '/recommend', prompt_arg,
-                cwd='/home/jpacker/workspace_git/gcal-mcp-server',
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                stdin=asyncio.subprocess.DEVNULL
-            )
-
-            # Wait for completion with timeout
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(),
-                    timeout=120
-                )
-            except asyncio.TimeoutError:
-                self.debug_log("Recommendation request timed out, killing process")
-                process.kill()
-                await process.wait()
-                self.status_message = "❌ Recommendation request timed out"
-                return None
-            except asyncio.CancelledError:
-                # Task was cancelled (user navigated away)
-                self.debug_log("Recommendation task cancelled, killing subprocess")
-                process.kill()
-                await process.wait()
-                raise  # Re-raise to propagate cancellation
-
-            stdout_text = stdout.decode('utf-8') if stdout else ""
-            stderr_text = stderr.decode('utf-8') if stderr else ""
-
-            self.debug_log(f"Subprocess completed with return code: {process.returncode}")
-            self.debug_log(f"stdout length: {len(stdout_text)} chars")
-            self.debug_log(f"stderr length: {len(stderr_text)} chars")
-
-            if stderr_text:
-                self.debug_log(f"stderr content: {stderr_text[:500]}")
-
-            if process.returncode != 0:
-                self.debug_log(f"Claude command failed: {stderr_text}")
-                self.status_message = f"❌ Failed to get recommendations: {stderr_text[:100]}"
-                return None
-
-            self.debug_log(f"Got recommendations ({len(stdout_text)} chars)")
-            self.debug_log(f"First 500 chars: {stdout_text[:500]}")
-            self.debug_log(f"Full output: {stdout_text}")
-
-            # Clean up temp file (DISABLED for debugging)
-            # try:
-            #     import os
-            #     os.unlink(events_file)
-            #     self.debug_log(f"Cleaned up temp file: {events_file}")
-            # except:
-            #     pass
-            self.debug_log(f"Keeping temp file for inspection: {events_file}")
-
-            return stdout_text
-
-        except asyncio.CancelledError:
-            # Task was cancelled - re-raise without logging as error
-            self.debug_log("get_recommendations cancelled")
-            raise
-        except FileNotFoundError:
-            self.status_message = "❌ Claude CLI not found. Install claude-code CLI tool."
-            return None
         except Exception as e:
-            import traceback
-            tb = traceback.format_exc()
-            self.debug_log(f"ERROR getting recommendations: {tb}")
-            self.status_message = f"❌ Error: {str(e)}"
-            return None
+            self.debug_log(f"Error fetching week range: {e}")
+            return False
 
-    def parse_recommendations(self, text: str) -> List[Dict]:
-        """Parse recommendations text into structured list
+    async def _fetch_more_data(self, direction: int):
+        """Fetch more data in the requested direction (background task)
 
-        Extracts recommendations and formats each to max 2 lines.
+        Args:
+            direction: -1 for previous week, 1 for next week
         """
-        recommendations = []
+        try:
+            now = datetime.now().astimezone()
 
-        self.debug_log(f"=== parse_recommendations() called ===")
-        self.debug_log(f"Text length: {len(text)} chars")
+            if direction < 0:
+                # Fetch previous week
+                if self.time_min:
+                    current_start = datetime.fromisoformat(self.time_min)
+                    # Go back one more week
+                    new_start = current_start - timedelta(days=7)
+                    new_end = current_start - timedelta(days=1)
 
-        # Split by lines
-        lines = text.split('\n')
-        self.debug_log(f"Total lines: {len(lines)}")
+                    self.set_loading_status("📥 Loading previous week...")
+                    success = await self._fetch_week_range(
+                        new_start.replace(hour=0, minute=0, second=0, microsecond=0),
+                        new_end.replace(hour=23, minute=59, second=59, microsecond=0)
+                    )
+                    self.clear_loading_status()
 
-        for line in lines:
-            # Look for numbered recommendations (1., 2., etc.)
-            stripped = line.strip()
-            if not stripped:
-                continue
+                    if success:
+                        self.status_message = "✅ Previous week loaded"
+                        self.draw()  # Redraw to show loaded days
+                    else:
+                        self.status_message = "⚠️ Failed to load previous week"
+            else:
+                # Fetch next week
+                if self.time_max:
+                    current_end = datetime.fromisoformat(self.time_max)
+                    # Go forward one more week
+                    new_start = current_end + timedelta(days=1)
+                    new_end = current_end + timedelta(days=7)
 
-            # Match patterns like "1. DECLINE:", "2. RESCHEDULE:", etc.
-            if stripped and stripped[0].isdigit() and '. ' in stripped[:5]:
-                # Extract the first line (action line)
-                # Format: "1. DECLINE: Event Title (event_id)"
-                action_line = stripped
-                self.debug_log(f"Found recommendation: {action_line[:50]}...")
+                    self.set_loading_status("📥 Loading next week...")
+                    success = await self._fetch_week_range(
+                        new_start.replace(hour=0, minute=0, second=0, microsecond=0),
+                        new_end.replace(hour=23, minute=59, second=59, microsecond=0)
+                    )
+                    self.clear_loading_status()
 
-                # Limit to reasonable width (about 100 chars for first line)
-                if len(action_line) > 100:
-                    action_line = action_line[:97] + "..."
+                    if success:
+                        self.status_message = "✅ Next week loaded"
+                        self.draw()  # Redraw to show loaded days
+                    else:
+                        self.status_message = "⚠️ Failed to load next week"
 
-                recommendations.append({
-                    'line1': action_line,
-                    'line2': ''  # Will be populated if there's a reason line
-                })
-            # Look for "Reason:" or "Time:" lines that belong to the previous recommendation
-            elif stripped.startswith(('Reason:', 'Time:', 'From:', 'To:')) and recommendations:
-                # Add as second line to the most recent recommendation
-                reason_line = '  ' + stripped  # Indent slightly
+        except Exception as e:
+            self.debug_log(f"Error fetching more data: {e}")
+            self.status_message = f"❌ Error loading data: {str(e)}"
 
-                # Limit to reasonable width
-                if len(reason_line) > 100:
-                    reason_line = reason_line[:97] + "..."
+    async def _background_fetch_full_range(self):
+        """Background task to incrementally fetch full 3-week range"""
+        try:
+            # Small delay to let UI render first
+            await asyncio.sleep(0.5)
 
-                # Only keep the first reason/time line (max 2 lines total)
-                if not recommendations[-1]['line2']:
-                    recommendations[-1]['line2'] = reason_line
+            now = datetime.now().astimezone()
 
-        self.debug_log(f"Parsed {len(recommendations)} recommendations")
-        return recommendations
+            # Calculate week boundaries
+            days_since_monday = now.weekday()  # 0 = Monday, 6 = Sunday
+            current_monday = now - timedelta(days=days_since_monday)
+            current_sunday = current_monday + timedelta(days=6)
+
+            previous_monday = current_monday - timedelta(days=7)
+            previous_sunday = previous_monday + timedelta(days=6)
+
+            next_monday = current_monday + timedelta(days=7)
+            next_sunday = next_monday + timedelta(days=6)
+
+            # Step 1: Complete the current week (we already have today/tomorrow)
+            # Decide: load whole week vs remaining days
+            # If we're early in the week (Mon-Tue), load whole week is simpler/faster
+            # If we're later (Wed-Sun), load remaining days
+
+            days_remaining = 6 - now.weekday()  # Days left in week (0 = Sunday is last day)
+
+            if now.weekday() <= 1:  # Monday or Tuesday
+                # Early in week - just reload whole week (simpler, one API call)
+                self.set_loading_status("📥 Loading current week...")
+                self.debug_log("Fetching current week (whole week)")
+
+                week_start = current_monday.replace(hour=0, minute=0, second=0, microsecond=0)
+                week_end = current_sunday.replace(hour=23, minute=59, second=59, microsecond=0)
+
+                success = await self._fetch_week_range(week_start, week_end)
+                self.clear_loading_status()
+            else:
+                # Later in week - load remaining days only
+                self.set_loading_status("📥 Loading rest of week...")
+                self.debug_log(f"Fetching remaining {days_remaining} days of current week")
+
+                # Start from tomorrow (or day after tomorrow if tomorrow is weekend)
+                remaining_start = now + timedelta(days=1)
+                while remaining_start.weekday() >= 5:  # Skip weekend
+                    remaining_start += timedelta(days=1)
+
+                remaining_start = remaining_start.replace(hour=0, minute=0, second=0, microsecond=0)
+                week_end = current_sunday.replace(hour=23, minute=59, second=59, microsecond=0)
+
+                success = await self._fetch_week_range(remaining_start, week_end)
+                self.clear_loading_status()
+
+            if success:
+                self.status_message = "✅ Current week loaded"
+                self.draw()  # Redraw to show loaded days in calendar
+                await asyncio.sleep(0.3)  # Brief pause between fetches
+            else:
+                self.status_message = "⚠️ Current week fetch failed"
+                await asyncio.sleep(0.3)
+
+            # Step 2: Load next week
+            self.set_loading_status("📥 Loading next week...")
+            self.debug_log("Fetching next week")
+
+            next_week_start = next_monday.replace(hour=0, minute=0, second=0, microsecond=0)
+            next_week_end = next_sunday.replace(hour=23, minute=59, second=59, microsecond=0)
+
+            success = await self._fetch_week_range(next_week_start, next_week_end)
+            self.clear_loading_status()
+            if success:
+                self.status_message = "✅ Next week loaded"
+                self.draw()  # Redraw to show loaded days in calendar
+                await asyncio.sleep(0.3)
+            else:
+                self.status_message = "⚠️ Next week fetch failed"
+                await asyncio.sleep(0.3)
+
+            # Step 3: Load previous week
+            self.set_loading_status("📥 Loading previous week...")
+            self.debug_log("Fetching previous week")
+
+            prev_week_start = previous_monday.replace(hour=0, minute=0, second=0, microsecond=0)
+            prev_week_end = previous_sunday.replace(hour=23, minute=59, second=59, microsecond=0)
+
+            success = await self._fetch_week_range(prev_week_start, prev_week_end)
+            self.clear_loading_status()
+            if success:
+                self.status_message = "✅ Full calendar loaded (3 weeks)"
+                self.debug_log("Background fetch completed successfully")
+                self.draw()  # Final redraw to show all loaded days
+            else:
+                self.status_message = "⚠️ Previous week fetch failed"
+
+        except Exception as e:
+            self.debug_log(f"Background fetch error: {e}")
+            import traceback
+            self.debug_log(traceback.format_exc())
+            self.status_message = f"❌ Background fetch error: {str(e)}"
+
 
     async def run(self):
         """Main event loop"""
-        # Initial fetch
-        success = await self.fetch_events(self.time_filter, self.time_min, self.time_max)
+        # Quick initial fetch (today + tomorrow if weekday) for fast startup
+        success = await self.run_with_spinner(
+            self.fetch_events(quick_mode=True),
+            "Loading today...",
+            "✅ Ready!"
+        )
         if not success:
             # Show the actual error message
             error_msg = f"Failed to fetch events: {self.status_message}. Press any key to exit."
@@ -1708,6 +2034,9 @@ class CalendarTUI:
         # Draw initial UI
         self.draw()
 
+        # Start background fetch for full 3 weeks
+        self.background_fetch_task = asyncio.create_task(self._background_fetch_full_range())
+
         while True:
             # Check for key input (non-blocking)
             try:
@@ -1723,67 +2052,19 @@ class CalendarTUI:
                 self.update_spinner()
                 self.update_status_line()
 
-            # Check if recommendations task completed (runs every loop iteration)
-            # Set flag to redraw on next iteration instead of drawing immediately
-            recommendations_completed = False
-            if self.recommendations_task and self.recommendations_task.done():
-                try:
-                    recommendations = self.recommendations_task.result()
-                    if recommendations:
-                        self.debug_log(f"Got recommendations text: {len(recommendations)} chars")
-                        self.recommendations_text = recommendations
-                        self.recommendations_list = self.parse_recommendations(recommendations)
-                        self.debug_log(f"Parsed into {len(self.recommendations_list)} items")
+            # Update header only if fetching data in background (to animate spinner in title)
+            if self.is_fetching:
+                self.draw_header()
 
-                        # Show recommendations section even if list is empty (will show "no recommendations" message)
-                        self.show_recommendations = True
-
-                        if self.recommendations_list:
-                            self.stop_loading(f"✅ {len(self.recommendations_list)} recommendations")
-                        else:
-                            self.stop_loading("✅ No recommendations needed")
-                    else:
-                        self.stop_loading("")  # Error message already set by get_recommendations
-                    self.recommendations_task = None
-                    recommendations_completed = True
-                except asyncio.CancelledError:
-                    # Task was cancelled (user navigated to different period)
-                    self.debug_log("Recommendations task was cancelled")
-                    self.recommendations_task = None
-                    self.stop_loading("")
-                except Exception as e:
-                    self.status_message = f"❌ Error: {str(e)}"
-                    self.stop_loading("")
-                    self.recommendations_task = None
-                    recommendations_completed = True
-
-            # Skip key processing if no key was pressed, but still redraw if recommendations completed
+            # Skip key processing if no key was pressed
             if key == -1:
-                # Redraw if recommendations just completed
-                if recommendations_completed:
-                    self.draw()
                 continue
 
             # Track if we need to redraw
             needs_redraw = True
 
-            # Also redraw if recommendations completed
-            if recommendations_completed:
-                needs_redraw = True
-
             if key == ord('q'):
                 break
-            elif key == ord('r'):
-                await self.run_with_spinner(
-                    self.fetch_events(self.time_filter, self.time_min, self.time_max),
-                    "Refreshing...",
-                    "✅ Refreshed!"
-                )
-                # Ensure cursor is still within bounds after refresh
-                if self.current_row >= len(self.events):
-                    self.current_row = max(0, len(self.events) - 1)
-                # Redraw full screen to show new events
-                needs_redraw = True
             elif key in [curses.KEY_UP, curses.KEY_DOWN]:
                 # Don't navigate if attendee details are showing
                 if not self.show_attendee_details:
@@ -1796,8 +2077,9 @@ class CalendarTUI:
                     self.attendee_details_event = None
                 else:
                     # Show attendee details for current event
-                    if self.events and self.current_row < len(self.events):
-                        event = self.events[self.current_row]
+                    filtered_events = self.get_filtered_events()
+                    if filtered_events and self.current_row < len(filtered_events):
+                        event = filtered_events[self.current_row]
                         # Only show if event has attendees and is not an available slot
                         if not event.is_available and event.attendees:
                             self.show_attendee_details = True
@@ -1813,56 +2095,118 @@ class CalendarTUI:
                 else:
                     needs_redraw = False
             elif key == curses.KEY_LEFT:
-                # Navigate to previous time period
-                self.navigate_time_period(-1)
-                await self.run_with_spinner(
-                    self.fetch_events(self.time_filter, self.time_min, self.time_max),
-                    "Loading previous period...",
-                    "✅ Loaded!"
-                )
-                self.current_row = 0
-                self.scroll_offset = 0
-                # Redraw full screen to show new events
-                needs_redraw = True
+                # Navigate to previous weekday
+                prev_date = self.current_view_date
+                needs_refetch = self.navigate_to_weekday(-1)
+                if needs_refetch:
+                    # Revert navigation - can't go beyond loaded data yet
+                    self.current_view_date = prev_date
+
+                    # Check if background task is still running
+                    if self.background_fetch_task and not self.background_fetch_task.done():
+                        self.status_message = "⏳ Loading data... (background fetch in progress)"
+                    else:
+                        # Background fetch complete but still need more data - start new fetch
+                        self.background_fetch_task = asyncio.create_task(self._fetch_more_data(-1))
+                        self.status_message = "⏳ Loading previous data..."
+                    needs_redraw = False  # Don't redraw since we didn't actually move
+                else:
+                    self.current_row = 0
+                    self.scroll_offset = 0
+                    needs_redraw = True
             elif key == curses.KEY_RIGHT:
-                # Navigate to next time period
-                self.navigate_time_period(1)
-                await self.run_with_spinner(
-                    self.fetch_events(self.time_filter, self.time_min, self.time_max),
-                    "Loading next period...",
-                    "✅ Loaded!"
-                )
+                # Navigate to next weekday
+                prev_date = self.current_view_date
+                needs_refetch = self.navigate_to_weekday(1)
+                if needs_refetch:
+                    # Revert navigation - can't go beyond loaded data yet
+                    self.current_view_date = prev_date
+
+                    # Check if background task is still running
+                    if self.background_fetch_task and not self.background_fetch_task.done():
+                        self.status_message = "⏳ Loading data... (background fetch in progress)"
+                    else:
+                        # Background fetch complete but still need more data - start new fetch
+                        self.background_fetch_task = asyncio.create_task(self._fetch_more_data(1))
+                        self.status_message = "⏳ Loading future data..."
+                    needs_redraw = False  # Don't redraw since we didn't actually move
+                else:
+                    self.current_row = 0
+                    self.scroll_offset = 0
+                    needs_redraw = True
+            elif key == ord('1'):
+                # Switch to single day view and reset to today
+                self.display_mode = 1
+                self.current_view_date = datetime.now().astimezone()
                 self.current_row = 0
                 self.scroll_offset = 0
-                # Redraw full screen to show new events
+                self._find_current_event()  # Position at current/next event
+                self.status_message = "Single day view (today)"
+                needs_redraw = True
+            elif key == ord('2'):
+                # Switch to two day view and reset to today
+                self.display_mode = 2
+                self.current_view_date = datetime.now().astimezone()
+                self.current_row = 0
+                self.scroll_offset = 0
+                self._find_current_event()  # Position at current/next event
+                self.status_message = "Two day view (today + tomorrow)"
                 needs_redraw = True
             elif key == ord('a'):
+                # Accept - optimistic update (instant, no spinner)
                 await self.handle_rsvp('accepted')
+                needs_redraw = True
             elif key == ord('t'):
+                # Tentative - optimistic update (instant, no spinner)
                 await self.handle_rsvp('tentative')
+                needs_redraw = True
             elif key == ord('d'):
                 # Check if current event is a focus time - if so, delete it
-                if self.events and self.current_row < len(self.events):
-                    event = self.events[self.current_row]
+                filtered_events = self.get_filtered_events()
+                if filtered_events and self.current_row < len(filtered_events):
+                    event = filtered_events[self.current_row]
                     if event.event_type == 'focusTime':
-                        await self.run_with_spinner(
-                            self.delete_focus_time(),
-                            "Deleting focus time...",
-                            None  # delete_focus_time sets its own success message
-                        )
-                        # Redraw full screen to show deletion
+                        # Delete - optimistic update (instant, no spinner)
+                        await self.delete_focus_time()
                         needs_redraw = True
                     else:
+                        # Decline - optimistic update (instant, no spinner)
                         await self.handle_rsvp('declined')
+                        needs_redraw = True
                 else:
+                    # Decline - optimistic update (instant, no spinner)
                     await self.handle_rsvp('declined')
+                    needs_redraw = True
             elif key == ord('f'):
-                await self.run_with_spinner(
-                    self.create_focus_time(),
-                    "Creating focus time..."
-                    # success_msg=None (default) - create_focus_time sets its own success message
-                )
+                # Optimistic update - instant, no spinner
+                await self.create_focus_time()
                 # Redraw full screen to show new focus time event
+                needs_redraw = True
+            elif key == ord('-'):
+                # Toggle showing/hiding declined events
+                self.show_declined_locally = not self.show_declined_locally
+
+                if self.show_declined_locally:
+                    self.status_message = "👁️ Showing declined events"
+
+                    # Debug: Dump in-memory events when showing declined
+                    import sys
+                    declined_events = [e for e in self.events if e.response_status == 'declined']
+                    print(f"\n[DEBUG] === Toggled to SHOW declined events ===", file=sys.stderr, flush=True)
+                    print(f"[DEBUG] Total events in memory: {len(self.events)}", file=sys.stderr, flush=True)
+                    print(f"[DEBUG] Declined events in memory: {len(declined_events)}", file=sys.stderr, flush=True)
+                    if declined_events:
+                        print(f"[DEBUG] Declined events:", file=sys.stderr, flush=True)
+                        for e in declined_events:
+                            start_str = e.start_time.strftime('%Y-%m-%d %H:%M') if e.start_time else 'N/A'
+                            print(f"[DEBUG]   - {start_str} | {e.summary} | id={e.id}", file=sys.stderr, flush=True)
+                    else:
+                        print(f"[DEBUG] No declined events found in memory!", file=sys.stderr, flush=True)
+                else:
+                    self.status_message = "🙈 Hiding declined events"
+
+                # No need to reload - just redraw with new filter
+                # Declined events are always fetched and never block time/conflicts
                 needs_redraw = True
             else:
                 needs_redraw = False
