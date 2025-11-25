@@ -330,6 +330,15 @@ class CalendarTUI:
         self.show_attendee_details = False
         self.attendee_details_event = None
 
+        # Recommendations overlay
+        self.show_recommendations = False
+        self.recommendations_text = ""
+        self.recommendations_loading = False
+        self.recommendations_scroll_offset = 0
+        self.recommendations_task = None  # Background task for fetching recommendations
+        self.recommendations_view_date = None  # Track which date recommendations were generated for
+        self.recommendations_display_mode = None  # Track which display mode recommendations were generated for
+
         # Loading state indicator with spinner
         self.is_fetching = False
         self.spinner_frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
@@ -1329,11 +1338,305 @@ class CalendarTUI:
 
         self.stdscr.refresh()
 
+    def _clear_recommendations(self):
+        """Clear cached recommendations when calendar data changes"""
+        if self.show_recommendations:
+            self.show_recommendations = False
+        self.recommendations_text = ""
+        self.recommendations_scroll_offset = 0
+        self.recommendations_view_date = None
+        self.recommendations_display_mode = None
+
+    def _are_recommendations_valid_for_current_view(self) -> bool:
+        """Check if cached recommendations are for the current view"""
+        if not self.recommendations_text:
+            return False
+        if self.recommendations_view_date is None or self.recommendations_display_mode is None:
+            return False
+        # Check if view date and mode match
+        return (self.recommendations_view_date == self.current_view_date.date() and
+                self.recommendations_display_mode == self.display_mode)
+
+    def _collect_events_for_recommendations(self) -> dict:
+        """Collect events from current view for recommendations"""
+        filtered_events = self.get_filtered_events()
+
+        # Convert events to JSON-serializable format
+        events_data = []
+        for event in filtered_events:
+            # Skip available slots
+            if event.is_available:
+                continue
+
+            event_dict = {
+                'id': event.id,
+                'summary': event.summary,
+                'start': event.start,
+                'end': event.end,
+                'has_overlap': event.has_overlap,
+                'overlapping_event_ids': event.overlapping_event_ids,
+                'attendees': event.attendees,
+                'eventType': event.event_type,
+                'responseStatus': event.response_status
+            }
+            events_data.append(event_dict)
+
+        return {
+            'events': events_data,
+            'count': len(events_data)
+        }
+
+    async def _fetch_recommendations_background(self):
+        """Background task to fetch recommendations without blocking the UI"""
+        try:
+            # Collect event data
+            events_data = self._collect_events_for_recommendations()
+
+            # Convert to JSON
+            events_json = json.dumps(events_data, indent=2)
+
+            # Build the prompt for Claude Code
+            prompt = f"""Analyze the following calendar events and provide recommendations:
+
+{events_json}
+
+Focus on:
+- Events with conflicts (has_overlap: true)
+- Back-to-back meetings exceeding 2 hours
+- Meetings that should be declined or rescheduled
+
+Provide recommendations in the specified format."""
+
+            # Call Claude Code /recommend command (async, non-blocking)
+            self.debug_log(f"Calling claude /recommend with {events_data['count']} events")
+
+            # Use asyncio subprocess for non-blocking execution
+            process = await asyncio.create_subprocess_exec(
+                'claude', '/recommend', prompt,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            # Wait for process to complete (with timeout) - yielding to event loop periodically
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=60.0
+                )
+
+                if process.returncode == 0:
+                    recommendations = stdout.decode('utf-8').strip()
+                    if recommendations:
+                        self.recommendations_text = recommendations
+                    else:
+                        self.recommendations_text = "No recommendations generated."
+                else:
+                    error_msg = stderr.decode('utf-8').strip() if stderr else "Unknown error"
+                    self.recommendations_text = f"❌ Error getting recommendations:\n{error_msg}"
+                    self.debug_log(f"Claude /recommend failed: {error_msg}")
+
+            except asyncio.TimeoutError:
+                self.recommendations_text = "❌ Request timed out. Please try again."
+                self.debug_log("Claude /recommend timed out")
+                # Kill the process if it's still running
+                try:
+                    process.kill()
+                    await process.wait()
+                except:
+                    pass
+
+        except FileNotFoundError:
+            self.recommendations_text = "❌ Claude Code CLI not found. Make sure 'claude' is in your PATH."
+            self.debug_log("claude command not found")
+        except Exception as e:
+            self.recommendations_text = f"❌ Error: {str(e)}"
+            self.debug_log(f"Error getting recommendations: {e}")
+        finally:
+            self.recommendations_loading = False
+            self.recommendations_task = None
+            # Save which view these recommendations were generated for
+            self.recommendations_view_date = self.current_view_date.date()
+            self.recommendations_display_mode = self.display_mode
+            # Redraw if modal is visible
+            if self.show_recommendations:
+                self.draw()
+
+    def start_recommendations_fetch(self, show_popup: bool = True):
+        """Start fetching recommendations in background
+
+        Args:
+            show_popup: If True, shows the modal immediately. If False, fetches silently in background.
+        """
+        # Cancel any existing task
+        if self.recommendations_task and not self.recommendations_task.done():
+            self.recommendations_task.cancel()
+
+        # Show loading state
+        self.recommendations_loading = True
+        if show_popup:
+            self.show_recommendations = True
+            self.spinner_index = 0  # Reset spinner animation
+            self.draw()
+
+        self.recommendations_text = ""  # Empty text while loading
+        self.recommendations_scroll_offset = 0  # Reset scroll position
+
+        # Start background task
+        self.recommendations_task = asyncio.create_task(self._fetch_recommendations_background())
+
+    def draw_recommendations(self):
+        """Draw recommendations overlay"""
+        if not self.show_recommendations:
+            return
+
+        height, width = self.stdscr.getmaxyx()
+
+        # Calculate modal dimensions
+        modal_width = min(100, width - 4)
+        modal_height = min(40, height - 4)
+        start_x = (width - modal_width) // 2
+        start_y = (height - modal_height) // 2
+
+        try:
+            # Draw modal background
+            for y in range(start_y, start_y + modal_height):
+                self.stdscr.addstr(y, start_x, " " * modal_width, curses.color_pair(1))
+
+            # Top border
+            self.stdscr.addstr(start_y, start_x, "╔" + "═" * (modal_width - 2) + "╗", curses.color_pair(1) | curses.A_BOLD)
+
+            # Title - show actual date(s) being viewed
+            if self.display_mode == 1:
+                view_days = self.current_view_date.strftime("%a %b %d")
+            else:
+                # Two-day view
+                next_day = self.current_view_date + timedelta(days=1)
+                view_days = f"{self.current_view_date.strftime('%a %b %d')} - {next_day.strftime('%a %b %d')}"
+            title = f" Calendar Recommendations ({view_days}) "
+            title_x = start_x + (modal_width - len(title)) // 2
+            self.stdscr.addstr(start_y, title_x, title, curses.color_pair(1) | curses.A_BOLD)
+
+            current_y = start_y + 1
+
+            # Draw separator
+            self.stdscr.addstr(current_y, start_x, "║" + "─" * (modal_width - 2) + "║", curses.color_pair(1))
+            current_y += 1
+
+            # If loading, show animated spinner in center
+            if self.recommendations_loading:
+                spinner_char = self.spinner_frames[self.spinner_index]
+                loading_lines = [
+                    "",
+                    f"{spinner_char} Analyzing calendar and generating recommendations...",
+                    "",
+                    "This may take a moment.",
+                    "",
+                    "Press ESC to cancel"
+                ]
+
+                # Calculate center position
+                content_start_y = start_y + (modal_height // 2) - (len(loading_lines) // 2)
+
+                for i, line in enumerate(loading_lines):
+                    y_pos = content_start_y + i
+                    if start_y + 2 <= y_pos < start_y + modal_height - 2:
+                        self.stdscr.addstr(y_pos, start_x, "║", curses.color_pair(1))
+                        # Pad line to full width to prevent ghosting of old spinner frames
+                        line_padded = line.center(modal_width - 2)
+                        self.stdscr.addstr(y_pos, start_x + 1, line_padded, curses.color_pair(1) | curses.A_BOLD)
+                        self.stdscr.addstr(y_pos, start_x + modal_width - 1, "║", curses.color_pair(1))
+
+                # Fill remaining space above and below
+                for y_pos in range(start_y + 2, start_y + modal_height - 2):
+                    if y_pos < content_start_y or y_pos >= content_start_y + len(loading_lines):
+                        self.stdscr.addstr(y_pos, start_x, "║" + " " * (modal_width - 2) + "║", curses.color_pair(1))
+
+            else:
+                # Show recommendations content
+                lines = self.recommendations_text.split('\n')
+                max_content_height = modal_height - 5
+                total_lines = len(lines)
+
+                # Calculate scroll position
+                visible_start = self.recommendations_scroll_offset
+                visible_end = visible_start + max_content_height
+
+                # Draw recommendations content with scrolling
+                for i, line in enumerate(lines[visible_start:visible_end]):
+                    if current_y >= start_y + modal_height - 3:
+                        break
+
+                    self.stdscr.addstr(current_y, start_x, "║", curses.color_pair(1))
+
+                    # Truncate line if too long
+                    display_line = line[:modal_width - 4]
+
+                    # Color code recommendations
+                    attr = curses.color_pair(1)
+                    if line.strip().startswith('DECLINE:'):
+                        attr = curses.color_pair(2)  # Red
+                    elif line.strip().startswith('RESCHEDULE:'):
+                        attr = curses.color_pair(4)  # Magenta
+                    elif line.strip().startswith('TENTATIVE:'):
+                        attr = curses.color_pair(4)  # Magenta
+                    elif line.strip().startswith('ACCEPT:'):
+                        attr = curses.color_pair(3)  # Green
+                    elif line.strip().startswith(tuple(str(i) + '.' for i in range(1, 20))):
+                        attr = curses.color_pair(1) | curses.A_BOLD
+
+                    self.stdscr.addstr(current_y, start_x + 2, display_line.ljust(modal_width - 4), attr)
+                    self.stdscr.addstr(current_y, start_x + modal_width - 1, "║", curses.color_pair(1))
+                    current_y += 1
+
+                # Fill remaining space
+                while current_y < start_y + modal_height - 2:
+                    self.stdscr.addstr(current_y, start_x, "║" + " " * (modal_width - 2) + "║", curses.color_pair(1))
+                    current_y += 1
+
+            # Footer
+            current_y = start_y + modal_height - 2
+            if self.recommendations_loading:
+                footer_text = "Press ESC to cancel"
+            else:
+                lines = self.recommendations_text.split('\n')
+                total_lines = len(lines)
+                max_content_height = modal_height - 5
+
+                # Show scroll indicators if content is scrollable
+                if total_lines > max_content_height:
+                    can_scroll_up = self.recommendations_scroll_offset > 0
+                    can_scroll_down = self.recommendations_scroll_offset + max_content_height < total_lines
+
+                    scroll_hint = ""
+                    if can_scroll_up and can_scroll_down:
+                        scroll_hint = "↑↓ Scroll | "
+                    elif can_scroll_down:
+                        scroll_hint = "↓ More below | "
+                    elif can_scroll_up:
+                        scroll_hint = "↑ Scroll up | "
+
+                    footer_text = f"{scroll_hint}ESC/Enter: Close | 'r': Refresh"
+                else:
+                    footer_text = "Press ESC or Enter to close | 'r' to refresh"
+
+            footer_x = start_x + (modal_width - len(footer_text)) // 2
+            self.stdscr.addstr(current_y, start_x, "║" + " " * (modal_width - 2) + "║", curses.color_pair(1))
+            self.stdscr.addstr(current_y, footer_x, footer_text, curses.color_pair(1) | curses.A_DIM)
+            current_y += 1
+
+            # Bottom border
+            self.stdscr.addstr(current_y, start_x, "╚" + "═" * (modal_width - 2) + "╝", curses.color_pair(1) | curses.A_BOLD)
+
+        except curses.error:
+            pass
+
+        self.stdscr.refresh()
+
     def draw_footer(self):
         """Draw the footer with help text"""
         height, width = self.stdscr.getmaxyx()
 
-        help_text = "↑/↓: Navigate | ←/→: Prev/Next Day | 1: Single Day | 2: Two Days | Enter: Attendees | a: Accept | t: Tentative | d: Decline/Delete | -: Toggle Declined | f: Focus | q: Quit"
+        help_text = "↑/↓: Navigate | ←/→: Prev/Next Day | 1: Single Day | 2: Two Days | Enter: Attendees | r: Recommendations | a: Accept | t: Tentative | d: Decline/Delete | -: Toggle Declined | f: Focus | q: Quit"
 
         # Status legend with declined toggle indicator
         declined_status = "👁️ Shown" if self.show_declined_locally else "🙈 Hidden"
@@ -1401,6 +1704,10 @@ class CalendarTUI:
         if self.show_attendee_details:
             self.draw_attendee_details()
 
+        # Draw recommendations overlay on top if showing
+        if self.show_recommendations:
+            self.draw_recommendations()
+
         self.stdscr.refresh()
 
     def handle_navigation(self, key: int):
@@ -1445,6 +1752,11 @@ class CalendarTUI:
         if not event.id:
             self.status_message = "Event has no ID, cannot delete"
             return
+
+        # Clear cached recommendations since calendar is changing
+        self._clear_recommendations()
+        # Start fetching new recommendations in background
+        self.start_recommendations_fetch(show_popup=False)
 
         # Optimistic update: Remove from local state immediately
         event_id = event.id
@@ -1517,6 +1829,11 @@ class CalendarTUI:
 
         # Store event date for reloading the correct day later
         event_date = event.start_time.date() if event.start_time else None
+
+        # Clear cached recommendations since calendar is changing
+        self._clear_recommendations()
+        # Start fetching new recommendations in background
+        self.start_recommendations_fetch(show_popup=False)
 
         # Optimistic update: Update local state immediately
         event_id = event.id
@@ -1607,6 +1924,12 @@ class CalendarTUI:
         # Only create focus time if on an available slot
         if current_event and current_event.is_available:
             self.debug_log("Creating focus time for single available slot - optimistic update")
+
+            # Clear cached recommendations since calendar is changing
+            self._clear_recommendations()
+            # Start fetching new recommendations in background
+            self.start_recommendations_fetch(show_popup=False)
+
             self._optimistic_create_single_focus_time(current_event)
             # Background API call
             asyncio.create_task(self._create_single_focus_time_background(current_event))
@@ -2037,6 +2360,9 @@ class CalendarTUI:
         # Start background fetch for full 3 weeks
         self.background_fetch_task = asyncio.create_task(self._background_fetch_full_range())
 
+        # Start background recommendations fetch (silently, without showing popup)
+        self.start_recommendations_fetch(show_popup=False)
+
         while True:
             # Check for key input (non-blocking)
             try:
@@ -2052,6 +2378,12 @@ class CalendarTUI:
                 self.update_spinner()
                 self.update_status_line()
 
+            # Update recommendations modal spinner if loading recommendations
+            if self.recommendations_loading and self.show_recommendations:
+                self.spinner_index = (self.spinner_index + 1) % len(self.spinner_frames)
+                # Only redraw the modal overlay, not the entire screen
+                self.draw_recommendations()
+
             # Update header only if fetching data in background (to animate spinner in title)
             if self.is_fetching:
                 self.draw_header()
@@ -2066,15 +2398,37 @@ class CalendarTUI:
             if key == ord('q'):
                 break
             elif key in [curses.KEY_UP, curses.KEY_DOWN]:
-                # Don't navigate if attendee details are showing
-                if not self.show_attendee_details:
+                # Handle scrolling in recommendations modal
+                if self.show_recommendations and not self.recommendations_loading:
+                    lines = self.recommendations_text.split('\n')
+                    height, width = self.stdscr.getmaxyx()
+                    modal_height = min(40, height - 4)
+                    max_content_height = modal_height - 5
+                    total_lines = len(lines)
+
+                    if key == curses.KEY_UP:
+                        if self.recommendations_scroll_offset > 0:
+                            self.recommendations_scroll_offset -= 1
+                    elif key == curses.KEY_DOWN:
+                        if self.recommendations_scroll_offset + max_content_height < total_lines:
+                            self.recommendations_scroll_offset += 1
+                # Don't navigate if attendee details showing
+                elif not self.show_attendee_details:
                     self.handle_navigation(key)
             elif key == ord('\n') or key == curses.KEY_ENTER or key == 10:
-                # Enter key - toggle attendee details
+                # Enter key - toggle attendee details or close recommendations
                 if self.show_attendee_details:
-                    # Close the overlay
+                    # Close the attendee details overlay
                     self.show_attendee_details = False
                     self.attendee_details_event = None
+                elif self.show_recommendations:
+                    # Close recommendations modal (even if loading)
+                    self.show_recommendations = False
+                    # Cancel background task if still running
+                    if self.recommendations_loading and self.recommendations_task:
+                        self.recommendations_task.cancel()
+                        self.recommendations_loading = False
+                        self.status_message = "Recommendations request cancelled"
                 else:
                     # Show attendee details for current event
                     filtered_events = self.get_filtered_events()
@@ -2088,10 +2442,18 @@ class CalendarTUI:
                             self.status_message = "No attendees for this event"
                             needs_redraw = False
             elif key == 27:  # ESC key
-                # Close attendee details if showing
+                # Close attendee details or recommendations if showing
                 if self.show_attendee_details:
                     self.show_attendee_details = False
                     self.attendee_details_event = None
+                elif self.show_recommendations:
+                    # Close recommendations modal (even if loading)
+                    self.show_recommendations = False
+                    # Cancel background task if still running
+                    if self.recommendations_loading and self.recommendations_task:
+                        self.recommendations_task.cancel()
+                        self.recommendations_loading = False
+                        self.status_message = "Recommendations request cancelled"
                 else:
                     needs_redraw = False
             elif key == curses.KEY_LEFT:
@@ -2111,8 +2473,12 @@ class CalendarTUI:
                         self.status_message = "⏳ Loading previous data..."
                     needs_redraw = False  # Don't redraw since we didn't actually move
                 else:
+                    # Clear cached recommendations since view is changing
+                    self._clear_recommendations()
                     self.current_row = 0
                     self.scroll_offset = 0
+                    # Start fetching recommendations for new view in background
+                    self.start_recommendations_fetch(show_popup=False)
                     needs_redraw = True
             elif key == curses.KEY_RIGHT:
                 # Navigate to next weekday
@@ -2131,26 +2497,38 @@ class CalendarTUI:
                         self.status_message = "⏳ Loading future data..."
                     needs_redraw = False  # Don't redraw since we didn't actually move
                 else:
+                    # Clear cached recommendations since view is changing
+                    self._clear_recommendations()
                     self.current_row = 0
                     self.scroll_offset = 0
+                    # Start fetching recommendations for new view in background
+                    self.start_recommendations_fetch(show_popup=False)
                     needs_redraw = True
             elif key == ord('1'):
                 # Switch to single day view and reset to today
+                # Clear cached recommendations since view is changing
+                self._clear_recommendations()
                 self.display_mode = 1
                 self.current_view_date = datetime.now().astimezone()
                 self.current_row = 0
                 self.scroll_offset = 0
                 self._find_current_event()  # Position at current/next event
                 self.status_message = "Single day view (today)"
+                # Start fetching recommendations for new view in background
+                self.start_recommendations_fetch(show_popup=False)
                 needs_redraw = True
             elif key == ord('2'):
                 # Switch to two day view and reset to today
+                # Clear cached recommendations since view is changing
+                self._clear_recommendations()
                 self.display_mode = 2
                 self.current_view_date = datetime.now().astimezone()
                 self.current_row = 0
                 self.scroll_offset = 0
                 self._find_current_event()  # Position at current/next event
                 self.status_message = "Two day view (today + tomorrow)"
+                # Start fetching recommendations for new view in background
+                self.start_recommendations_fetch(show_popup=False)
                 needs_redraw = True
             elif key == ord('a'):
                 # Accept - optimistic update (instant, no spinner)
@@ -2181,6 +2559,19 @@ class CalendarTUI:
                 # Optimistic update - instant, no spinner
                 await self.create_focus_time()
                 # Redraw full screen to show new focus time event
+                needs_redraw = True
+            elif key == ord('r'):
+                # Get/show recommendations
+                if self.show_recommendations and not self.recommendations_loading:
+                    # If already showing, refresh the recommendations
+                    self.start_recommendations_fetch(show_popup=True)
+                elif not self.show_recommendations and self._are_recommendations_valid_for_current_view() and not self.recommendations_loading:
+                    # Recommendations already cached for this exact view, just show them
+                    self.show_recommendations = True
+                    self.recommendations_scroll_offset = 0
+                else:
+                    # Fetch and show recommendations (either no cache or cache is stale)
+                    self.start_recommendations_fetch(show_popup=True)
                 needs_redraw = True
             elif key == ord('-'):
                 # Toggle showing/hiding declined events
