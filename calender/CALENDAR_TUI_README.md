@@ -5,11 +5,14 @@ A text-based interactive calendar application that uses the Google Calendar MCP 
 ## Features
 
 - **Interactive Table View**: View all your calendar events in a clean, terminal-based table
-- **Keyboard Navigation**: Navigate through events using arrow keys
+- **Flexible Display Modes**: Switch between single day and two-day views with mini calendar navigation
+- **Keyboard Navigation**: Navigate through events and days using arrow keys
 - **RSVP Management**: Quickly accept, decline, or mark events as tentative
-- **Focus Time Creation**: Create focus time blocks with customizable duration
+- **Focus Time Creation**: Create focus time blocks with customizable duration on available time slots
 - **Overlap Detection**: Visually highlights overlapping events with color coding and event IDs
-- **Real-time Updates**: Refresh events and sync changes with Google Calendar
+- **Smart Refresh**: Reload current period (1 or 2 days) from Google Calendar on demand
+- **AI-Powered Recommendations**: Automatic background analysis with conflict resolution and optimization suggestions
+- **Available Time Slots**: Visual indicators (green/grey boxes) showing free time during your workday
 
 ## Installation
 
@@ -75,14 +78,43 @@ Run the calendar TUI:
 | Key | Action |
 |-----|--------|
 | `↑` / `↓` | Navigate up/down through events |
-| `←` / `→` | Navigate to previous/next time period |
+| `←` / `→` | Navigate to previous/next weekday |
+| `1` | Switch to single day view (shows current day only) |
+| `2` | Switch to two-day view (shows current day + tomorrow) |
 | `Enter` | Show attendee details (if event has attendees) |
 | `a` | Accept selected event |
 | `t` | Mark event as tentative |
 | `d` | Decline selected event (or delete focus time) |
-| `f` | Create focus time blocks |
-| `r` | Refresh events from calendar |
+| `-` | Toggle showing/hiding declined events |
+| `f` | Create focus time blocks on available slots |
+| `r` | Show AI-powered recommendations for current period |
+| `R` | **Refresh current period** - Reload events from Google Calendar for the displayed day(s) |
 | `q` | Quit application |
+
+### Display Modes
+
+The calendar supports two view modes that affect what events are displayed:
+
+- **Single Day (1)**: Shows only the current viewing day
+- **Two Day (2)**: Shows current viewing day plus the next day
+
+The display mode is shown in the header and affects:
+- Which days are highlighted in the mini calendar (white background)
+- The date range shown in the header
+- What gets refreshed when you press `R`
+
+### Refresh vs Recommendations
+
+- **Refresh (`R`)**: Reloads event data from Google Calendar for the current period
+  - In single day mode: refreshes current day only
+  - In two-day mode: refreshes current day + next day
+  - Shows spinner with "Refreshing today..." or "Refreshing today + tomorrow..."
+  - Use this to sync latest changes from Google Calendar
+
+- **Recommendations (`r`)**: Shows AI-powered suggestions for your calendar
+  - Analyzes conflicts, back-to-back meetings, and scheduling patterns
+  - Generates actionable recommendations
+  - Cached per view - reuse if you return to the same period
 
 ## Attendee Details
 
@@ -153,14 +185,17 @@ The recommendation engine prioritizes:
 ### How It Works
 1. Recommendations are automatically fetched in the background when you:
    - Start the application
-   - Refresh the calendar (press `r`)
-   - Navigate to a different day or week (arrow keys)
+   - Manually refresh the calendar (press `R`)
+   - Navigate to a different day or period (arrow keys, `1`, `2`)
+   - After RSVP changes, focus time creation/deletion
 2. While Claude analyzes your calendar, you can continue working:
    - Navigate through events
    - Accept/decline meetings
    - Create focus time blocks
-3. When analysis completes, recommendations appear below your events
-4. Recommendations are displayed as concise, actionable items (max 2 lines each)
+   - Change display modes
+3. When analysis completes, a 💡 lightbulb indicator appears in the footer
+4. Press `r` to view recommendations in a modal overlay
+5. Recommendations are cached per view - if you return to the same day/mode, press `r` to see them instantly
 
 **Note**: The recommendations are for review only. You can use the suggested actions (decline specific meetings, create focus time, etc.) to manually optimize your schedule.
 
@@ -248,20 +283,54 @@ This architecture allows:
 
 ## Visual Indicators
 
+### Mini Calendar Header
+The top of the screen shows a compact 3-week calendar view:
+- **Green background (🟩)**: Today's date
+- **White background (⬜)**: Currently viewing day(s)
+  - Single day mode: highlights one day
+  - Two-day mode: highlights current day and next day
+- **White text**: Days with loaded calendar data
+- **Dim text**: Days not yet loaded
+- **Brackets `[...]`**: Previous and next weeks (navigate with arrow keys)
+
+Example:
+```
+               📅 Interactive Calendar
+       Monday, December 09 - Tuesday, December 10, 2025
+[Mo Tu We Th Fr] Mo Tu We Th Fr [Mo Tu We Th Fr]
+                 ^^    ^^
+           (highlighted = viewing these two days)
+```
+
 ### Current Time Indicator
 - `🕐` - Clock emoji appears before the currently active event title
 - On startup, the cursor automatically positions at the current or next event
-- On refresh (press `r`), the cursor stays in place
+- On refresh (press `R`), the cursor stays in place
 
 ### RSVP Status
 - `✅` - Accepted
 - `❌` - Declined
 - `⏳` - Tentative
 - `❓` - No response yet
+- `📋` - Task
 - `🎧` - Focus time
 - `🏠` - Working from home
 - `🏢` - Working from office
 - `📍` - Custom location
+
+### Available Time Slots
+Available time slots are automatically detected during your workday (9am-5pm by default):
+- **🟩 Green boxes**: Available time during core hours (9am-5pm)
+- **⬛ Grey boxes**: Available time outside core hours
+- Each box represents 30 minutes
+- Shown as "🟩🟩🟩 Available" in the event list
+- Press `f` on an available slot to create focus time
+
+Available slots appear:
+- Between meetings (gaps of 30+ minutes)
+- Before first meeting of the day
+- After last meeting of the day (if before 5pm)
+- Only on days with loaded calendar data
 
 ### Meeting Links
 - Google Meet links display as short meeting IDs (e.g., `kmv-cnxe-buy`)
@@ -273,9 +342,9 @@ This architecture allows:
 - **White background** - Currently selected event
 - **Green text** - Accepted events
 - **Red text** - Declined events
-- **Yellow text** - Tentative events
+- **Yellow text** - Tentative events and Focus time blocks
+- **Orange text** - Task events
 - **Cyan text** - Events with overlaps
-- **Magenta text** - Focus time blocks
 
 ### Overlap Detection
 When events overlap, you'll see:
@@ -303,13 +372,23 @@ Focus time is a special event type that:
 - Automatically declines new conflicting invitations
 - Sets your chat status to "Do Not Disturb"
 - Helps you block out time for deep work
+- Identified by 🎧 headphone emoji
 
-To create focus time:
-1. Navigate to an available time slot (shown with green 🟩 boxes)
+### Creating Focus Time
+1. Navigate to an available time slot (shown with 🟩 green boxes or ⬛ grey boxes)
 2. Press `f` to instantly create focus time for that slot
 3. The focus time event appears immediately while saving to Google Calendar in the background
 
-**Note:** Focus time can only be created on available time slots. Select a green box slot first, then press `f`.
+**Duration Logic:**
+- Slots ≤40 minutes: Creates "Paperwork - Focus time"
+- Slots >40 minutes: Creates "Development - Focus time"
+
+### Deleting Focus Time
+1. Navigate to a focus time event (marked with 🎧)
+2. Press `d` to delete it
+3. The event is removed immediately while deleting from Google Calendar in the background
+
+**Note:** Only available time slots can be converted to focus time. Declined events are treated as free time and don't block available slots.
 
 ## Requirements
 

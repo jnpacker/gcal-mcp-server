@@ -67,6 +67,13 @@ class CalendarEvent:
             self.attendees = event_data.get('attendees', [])
             self.event_type = event_data.get('eventType', 'default')
 
+            # Google Tasks appear as focusTime events but have tasks.google.com in description
+            # Detect and reclassify them as 'task' type
+            if self.event_type == 'focusTime':
+                description = event_data.get('description', '')
+                if 'tasks.google.com/task/' in description:
+                    self.event_type = 'task'
+
             # Extract hangout/meet link
             self.hangout_link = event_data.get('hangoutLink', '')
 
@@ -157,6 +164,10 @@ class CalendarEvent:
         if self.is_available:
             # No emoji in RSVP column for available slots
             return ''
+
+        # Task gets clipboard emoji
+        if self.event_type == 'task':
+            return '📋'
 
         # Focus time gets headphone emoji
         if self.event_type == 'focusTime':
@@ -379,6 +390,19 @@ class CalendarTUI:
             # Use white as fallback if terminal doesn't support custom colors
             light_grey_color = curses.COLOR_WHITE
 
+        # Try to create custom orange color for task events
+        if curses.can_change_color():
+            try:
+                # Define color 16 as orange (RGB values scaled to 0-1000)
+                curses.init_color(16, 1000, 647, 0)  # Orange RGB: (255, 165, 0)
+                orange_color = 16
+            except:
+                # Fall back to yellow if custom colors don't work
+                orange_color = curses.COLOR_YELLOW
+        else:
+            # Use yellow as fallback if terminal doesn't support custom colors
+            orange_color = curses.COLOR_YELLOW
+
         # Regular colors (text on black background)
         curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_WHITE)  # Default selection (black on white)
         curses.init_pair(2, conflict_color, curses.COLOR_BLACK)  # Declined/Overlap (dark red)
@@ -395,6 +419,10 @@ class CalendarTUI:
 
         # Dark grey for out-of-hours available slots (dimmed white appears grey)
         curses.init_pair(11, curses.COLOR_WHITE, curses.COLOR_BLACK)  # Will be used with A_DIM
+
+        # Task colors (orange)
+        curses.init_pair(15, orange_color, curses.COLOR_BLACK)  # Task (orange on black)
+        curses.init_pair(16, orange_color, curses.COLOR_WHITE)  # Selected task (orange on white)
 
         # Mini calendar colors
         curses.init_pair(12, curses.COLOR_BLACK, curses.COLOR_GREEN)  # Current day (green background)
@@ -851,7 +879,15 @@ class CalendarTUI:
             title = f"📅 Interactive Calendar {spinner_char}"
         else:
             title = "📅 Interactive Calendar"
-        date_str = self.current_view_date.strftime("%A, %B %d, %Y")
+
+        # Show date range based on display mode
+        if self.display_mode == 2:
+            # Two-day view: show both dates
+            next_day = self.current_view_date + timedelta(days=1)
+            date_str = f"{self.current_view_date.strftime('%A, %B %d')} - {next_day.strftime('%A, %B %d, %Y')}"
+        else:
+            # Single day view: show one date
+            date_str = self.current_view_date.strftime("%A, %B %d, %Y")
 
         self.stdscr.addstr(0, (width - len(title)) // 2, title, curses.A_BOLD)
         self.stdscr.addstr(1, (width - len(date_str)) // 2, date_str)
@@ -938,11 +974,13 @@ class CalendarTUI:
         is_today = (day_date == today)
         is_loaded = day_date in self.loaded_dates
 
-        # Check if this day is in the selected view
+        # Check if this day is in the selected view period
         is_selected = False
         if self.display_mode == 1:
+            # Single day view: only highlight current view date
             is_selected = (day_date == view_date)
         elif self.display_mode == 2:
+            # Two-day view: highlight both current day AND next day
             next_date = (self.current_view_date + timedelta(days=1)).date()
             is_selected = (day_date == view_date or day_date == next_date)
 
@@ -1025,7 +1063,10 @@ class CalendarTUI:
 
         if is_selected:
             # Selection bar uses white background with colored text
-            if event.event_type == 'focusTime':
+            if event.event_type == 'task':
+                # Orange text on white background
+                attr = curses.color_pair(16) | curses.A_BOLD
+            elif event.event_type == 'focusTime':
                 # Yellow text on white background
                 attr = curses.color_pair(10) | curses.A_BOLD
             elif event.has_overlap or event.response_status == 'declined':
@@ -1077,7 +1118,10 @@ class CalendarTUI:
                 # Default: normal
                 attr = curses.A_NORMAL
 
-            if event.event_type == 'focusTime':
+            if event.event_type == 'task':
+                # Task: orange
+                attr = curses.color_pair(15)
+            elif event.event_type == 'focusTime':
                 # Focus time: yellow
                 attr = curses.color_pair(6)
 
@@ -1747,11 +1791,11 @@ class CalendarTUI:
             self._are_recommendations_valid_for_current_view()):
             recommendations_indicator = "💡 "  # Lightbulb emoji indicates recommendations are ready
 
-        help_text = f"↑/↓: Navigate | ←/→: Prev/Next Day | 1: Single Day | 2: Two Days | Enter: Attendees | {recommendations_indicator}r: Recommendations | a: Accept | t: Tentative | d: Decline/Delete | -: Toggle Declined | f: Focus | q: Quit"
+        help_text = f"↑/↓: Navigate | ←/→: Prev/Next Day | 1: Single Day | 2: Two Days | Enter: Attendees | {recommendations_indicator}r: Recommendations | R: Refresh | a: Accept | t: Tentative | d: Decline/Delete | -: Toggle Declined | f: Focus | q: Quit"
 
         # Status legend with declined toggle indicator
         declined_status = "👁️ Shown" if self.show_declined_locally else "🙈 Hidden"
-        legend = f"Status: ✅ Accepted | ⏳ Maybe/Tentative | ❓ No Response | 🎧 Focus time | ⚠️  Conflict | Declined: {declined_status}"
+        legend = f"Status: ✅ Accepted | ⏳ Maybe/Tentative | ❓ No Response | 📋 Task | 🎧 Focus time | ⚠️  Conflict | Declined: {declined_status}"
 
         # Add debug indicator to legend if debug mode is enabled
         if self.debug:
@@ -1869,6 +1913,9 @@ class CalendarTUI:
         # Start fetching new recommendations in background
         self.start_recommendations_fetch(show_popup=False)
 
+        # Capture event date for reloading later
+        event_date = event.start_time.date() if event.start_time else None
+
         # Optimistic update: Remove from local state immediately
         event_id = event.id
         self.events = [e for e in self.events if e.id != event_id]
@@ -1876,9 +1923,9 @@ class CalendarTUI:
         self.status_message = "✅ Focus time deleted"
 
         # Async: Delete on server in background
-        asyncio.create_task(self._delete_event_background(event_id))
+        asyncio.create_task(self._delete_event_background(event_id, event_date))
 
-    async def _delete_event_background(self, event_id: str):
+    async def _delete_event_background(self, event_id: str, event_date):
         """Background task to delete event on server"""
         try:
             params = {"event_id": event_id, "send_notifications": False}
@@ -1888,33 +1935,56 @@ class CalendarTUI:
             if isinstance(result, str) and ("Error:" in result or "error" in result.lower()):
                 self.status_message = f"❌ Delete failed, reloading"
                 self.debug_log(f"Delete error: {result}")
-                await self._reload_current_day()
+                await self._reload_event_day(event_date)
             else:
                 self.debug_log("Background: Delete successful, reloading to sync and recalculate available slots")
                 # Reload to sync server state and recalculate available slots
-                await self._reload_current_day()
+                await self._reload_event_day(event_date)
         except Exception as e:
             self.status_message = f"❌ Delete failed, reloading"
             self.debug_log(f"Delete exception: {e}")
-            await self._reload_current_day()
+            await self._reload_event_day(event_date)
 
-    async def _reload_current_day(self):
-        """Reload just the current view day's data"""
+    async def _reload_current_period(self, start_date: datetime = None, end_date: datetime = None):
+        """Reload the current period's data
+
+        Args:
+            start_date: Optional start of period. If None, uses current_view_date start of day.
+            end_date: Optional end of period. If None, calculates based on display_mode:
+                      - display_mode 1: end of current day
+                      - display_mode 2: end of next day (current + tomorrow)
+        """
         try:
             view_date = self.current_view_date
-            start_of_day = view_date.replace(hour=0, minute=0, second=0, microsecond=0)
-            end_of_day = view_date.replace(hour=23, minute=59, second=59, microsecond=0)
 
-            await self._fetch_week_range(start_of_day, end_of_day, replace=True)
+            # Calculate start of period
+            if start_date is None:
+                start_date = view_date.replace(hour=0, minute=0, second=0, microsecond=0)
+
+            # Calculate end of period based on display mode if not provided
+            if end_date is None:
+                if self.display_mode == 2:
+                    # Two-day view: include next day
+                    next_day = view_date + timedelta(days=1)
+                    end_date = next_day.replace(hour=23, minute=59, second=59, microsecond=0)
+                else:
+                    # Single day view: just current day
+                    end_date = view_date.replace(hour=23, minute=59, second=59, microsecond=0)
+
+            self.debug_log(f"_reload_current_period: view_date={view_date.date()}, mode={self.display_mode}, range={start_date.date()} to {end_date.date()}, events_before={len(self.events)}")
+
+            await self._fetch_week_range(start_date, end_date, replace=True)
+
+            self.debug_log(f"_reload_current_period: events_after={len(self.events)}")
             self.draw()
         except Exception as e:
-            self.debug_log(f"Error reloading current day: {e}")
+            self.debug_log(f"Error reloading current period: {e}")
 
     async def _reload_event_day(self, event_date):
         """Reload the specific day an event is on"""
         if not event_date:
-            self.debug_log("No event date provided, reloading current day instead")
-            await self._reload_current_day()
+            self.debug_log("No event date provided, reloading current period instead")
+            await self._reload_current_period()
             return
 
         try:
@@ -2041,9 +2111,12 @@ class CalendarTUI:
             # Start fetching new recommendations in background
             self.start_recommendations_fetch(show_popup=False)
 
+            # Capture event date for reloading later
+            event_date = current_event.start_time.date() if current_event.start_time else None
+
             self._optimistic_create_single_focus_time(current_event)
             # Background API call
-            asyncio.create_task(self._create_single_focus_time_background(current_event))
+            asyncio.create_task(self._create_single_focus_time_background(current_event, event_date))
         else:
             self.status_message = "❌ Select an available time slot first (press 'f' on green boxes)"
             self.debug_log("No available slot selected")
@@ -2095,7 +2168,7 @@ class CalendarTUI:
         self.status_message = f"✅ Creating {int(duration_minutes)}min {title}..."
         self.debug_log(f"Optimistic: Added temp focus time event, removed available slot")
 
-    async def _create_single_focus_time_background(self, available_slot):
+    async def _create_single_focus_time_background(self, available_slot, event_date):
         """Background task to create focus time on server"""
         try:
             start_time = available_slot.start_time
@@ -2103,7 +2176,7 @@ class CalendarTUI:
 
             if not start_time or not end_time:
                 self.debug_log("Background: Invalid time range")
-                await self._reload_current_day()
+                await self._reload_event_day(event_date)
                 return
 
             # Calculate duration and title
@@ -2135,17 +2208,17 @@ class CalendarTUI:
             if isinstance(result, str) and ("Error:" in result or "error" in result.lower()):
                 self.debug_log(f"Background: API error: {result}")
                 self.status_message = f"❌ Focus time creation failed, reloading"
-                await self._reload_current_day()
+                await self._reload_event_day(event_date)
             else:
                 self.debug_log("Background: Focus time created successfully, reloading to get real event ID")
                 self.status_message = f"✅ Created {int(duration_minutes)}min {title}"
                 # Reload to replace temp event ID with real server ID
-                await self._reload_current_day()
+                await self._reload_event_day(event_date)
 
         except Exception as e:
             self.debug_log(f"Background: Exception creating focus time: {e}")
             self.status_message = f"❌ Focus time creation failed, reloading"
-            await self._reload_current_day()
+            await self._reload_event_day(event_date)
 
     def navigate_to_weekday(self, direction: int):
         """Navigate to previous (-1) or next (1) weekday, skipping weekends
@@ -2367,31 +2440,15 @@ class CalendarTUI:
 
             days_remaining = 6 - now.weekday()  # Days left in week (0 = Sunday is last day)
 
-            if now.weekday() <= 1:  # Monday or Tuesday
-                # Early in week - just reload whole week (simpler, one API call)
-                self.set_loading_status("📥 Loading current week...")
-                self.debug_log("Fetching current week (whole week)")
+            # Always load the full current week to ensure we have past days
+            self.set_loading_status("📥 Loading current week...")
+            self.debug_log("Fetching current week (full week)")
 
-                week_start = current_monday.replace(hour=0, minute=0, second=0, microsecond=0)
-                week_end = current_sunday.replace(hour=23, minute=59, second=59, microsecond=0)
+            week_start = current_monday.replace(hour=0, minute=0, second=0, microsecond=0)
+            week_end = current_sunday.replace(hour=23, minute=59, second=59, microsecond=0)
 
-                success = await self._fetch_week_range(week_start, week_end)
-                self.clear_loading_status()
-            else:
-                # Later in week - load remaining days only
-                self.set_loading_status("📥 Loading rest of week...")
-                self.debug_log(f"Fetching remaining {days_remaining} days of current week")
-
-                # Start from tomorrow (or day after tomorrow if tomorrow is weekend)
-                remaining_start = now + timedelta(days=1)
-                while remaining_start.weekday() >= 5:  # Skip weekend
-                    remaining_start += timedelta(days=1)
-
-                remaining_start = remaining_start.replace(hour=0, minute=0, second=0, microsecond=0)
-                week_end = current_sunday.replace(hour=23, minute=59, second=59, microsecond=0)
-
-                success = await self._fetch_week_range(remaining_start, week_end)
-                self.clear_loading_status()
+            success = await self._fetch_week_range(week_start, week_end)
+            self.clear_loading_status()
 
             if success:
                 self.status_message = "✅ Current week loaded"
@@ -2688,16 +2745,20 @@ class CalendarTUI:
                     needs_redraw = False
                     continue
 
-                # Check if current event is a focus time - if so, delete it
+                # Check event type to determine action
                 filtered_events = self.get_filtered_events()
                 if filtered_events and self.current_row < len(filtered_events):
                     event = filtered_events[self.current_row]
-                    if event.event_type == 'focusTime':
-                        # Delete - optimistic update (instant, no spinner)
+                    if event.event_type == 'task':
+                        # Block deletion of tasks - they must be completed in Google Tasks
+                        self.status_message = "❌ Tasks cannot be deleted from calendar. Mark complete in Google Tasks."
+                        needs_redraw = True
+                    elif event.event_type == 'focusTime':
+                        # Delete focus time - optimistic update (instant, no spinner)
                         await self.delete_focus_time()
                         needs_redraw = True
                     else:
-                        # Decline - optimistic update (instant, no spinner)
+                        # Decline regular event - optimistic update (instant, no spinner)
                         await self.handle_rsvp('declined')
                         needs_redraw = True
                 else:
@@ -2726,6 +2787,29 @@ class CalendarTUI:
                 else:
                     # Fetch and show recommendations (either no cache or cache is stale)
                     self.start_recommendations_fetch(show_popup=True)
+                needs_redraw = True
+            elif key == ord('R'):
+                # Ignore if modal is open
+                if self.show_attendee_details or self.show_recommendations:
+                    needs_redraw = False
+                    continue
+
+                # Refresh current period (respects display_mode: 1 day or 2 days)
+                self._clear_recommendations()
+                if self.display_mode == 2:
+                    loading_msg = "Refreshing today + tomorrow..."
+                    success_msg = "✅ Refreshed today + tomorrow"
+                else:
+                    loading_msg = "Refreshing today..."
+                    success_msg = "✅ Refreshed today"
+
+                await self.run_with_spinner(
+                    self._reload_current_period(),
+                    loading_msg,
+                    success_msg
+                )
+                # Start fetching new recommendations in background
+                self.start_recommendations_fetch(show_popup=False)
                 needs_redraw = True
             elif key == ord('-'):
                 # Ignore if modal is open
