@@ -1979,6 +1979,8 @@ class CalendarTUI:
             self.draw()
         except Exception as e:
             self.debug_log(f"Error reloading current period: {e}")
+            self.status_message = f"❌ Refresh failed: {str(e)}"
+            raise
 
     async def _reload_event_day(self, event_date):
         """Reload the specific day an event is on"""
@@ -2299,14 +2301,32 @@ class CalendarTUI:
                 def event_in_range(event, range_start, range_end):
                     if not event.start_time:
                         return False
+                    # Convert to UTC for consistent comparison across timezones
+                    event_utc = event.start_time.astimezone(timezone.utc)
+                    range_start_utc = range_start.astimezone(timezone.utc)
+                    range_end_utc = range_end.astimezone(timezone.utc)
                     # Check if event starts within the reload range
-                    return range_start <= event.start_time < range_end
+                    return range_start_utc <= event_utc < range_end_utc
+
+                # Count events before replacement
+                events_before = len(self.events)
+                events_in_range = [e for e in self.events if event_in_range(e, start_date, end_date)]
+
+                self.debug_log(f"REPLACE: Found {len(events_in_range)} events in range to remove")
+                for e in events_in_range:
+                    self.debug_log(f"  Removing: {e.summary} (id={e.id[:20] if e.id else 'None'}...)")
 
                 # Keep only events outside the reload range
                 self.events = [e for e in self.events if not event_in_range(e, start_date, end_date)]
 
+                self.debug_log(f"REPLACE: Adding {len(filtered_new_events)} events from server")
+                for e in filtered_new_events:
+                    self.debug_log(f"  Adding: {e.summary} (id={e.id[:20] if e.id else 'None'}...)")
+
                 # Add all new events from server
                 self.events.extend(filtered_new_events)
+                events_after = len(self.events)
+                self.debug_log(f"REPLACE: Events before={events_before}, removed={len(events_in_range)}, added={len(filtered_new_events)}, after={events_after}")
             else:
                 # MERGE mode: Add new events, avoiding duplicates by ID
                 # Used for background fetch to accumulate data from multiple weeks
@@ -2797,11 +2817,17 @@ class CalendarTUI:
                 # Refresh current period (respects display_mode: 1 day or 2 days)
                 self._clear_recommendations()
                 if self.display_mode == 2:
-                    loading_msg = "Refreshing today + tomorrow..."
-                    success_msg = "✅ Refreshed today + tomorrow"
+                    # Two-day view: show both dates
+                    next_day = self.current_view_date + timedelta(days=1)
+                    day1 = self.current_view_date.strftime("%a %b %d")
+                    day2 = next_day.strftime("%a %b %d")
+                    loading_msg = f"Refreshing {day1} + {day2}..."
+                    success_msg = f"✅ Refreshed {day1} + {day2}"
                 else:
-                    loading_msg = "Refreshing today..."
-                    success_msg = "✅ Refreshed today"
+                    # Single day view: show one date
+                    day = self.current_view_date.strftime("%a %b %d")
+                    loading_msg = f"Refreshing {day}..."
+                    success_msg = f"✅ Refreshed {day}"
 
                 await self.run_with_spinner(
                     self._reload_current_period(),
