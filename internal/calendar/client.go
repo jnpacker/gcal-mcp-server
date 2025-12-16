@@ -243,10 +243,11 @@ func (c *Client) CreateEvent(params EventParams) (*calendar.Event, error) {
 
 	// Set reminders
 	if params.Reminders != nil {
-		event.Reminders = &calendar.EventReminders{
-			UseDefault: params.Reminders.UseDefault,
-		}
+		event.Reminders = &calendar.EventReminders{}
+		
 		if len(params.Reminders.Overrides) > 0 {
+			// When overrides are provided, ONLY set UseDefault=false and Overrides
+			event.Reminders.UseDefault = false
 			overrides := make([]*calendar.EventReminder, len(params.Reminders.Overrides))
 			for i, reminder := range params.Reminders.Overrides {
 				overrides[i] = &calendar.EventReminder{
@@ -255,6 +256,15 @@ func (c *Client) CreateEvent(params EventParams) (*calendar.Event, error) {
 				}
 			}
 			event.Reminders.Overrides = overrides
+		} else {
+			// No overrides - use the UseDefault value from params
+			event.Reminders.UseDefault = params.Reminders.UseDefault
+		}
+
+		// Force send UseDefault if it's false, otherwise it might be omitted by json encoding
+		// and the API might default it to true, causing conflicts with overrides.
+		if !event.Reminders.UseDefault {
+			event.Reminders.ForceSendFields = append(event.Reminders.ForceSendFields, "UseDefault")
 		}
 	}
 
@@ -510,10 +520,11 @@ func (c *Client) PatchEventDirect(eventID string, params PatchEventParams) (*cal
 
 	// Handle reminders
 	if params.Reminders != nil {
-		patchEvent.Reminders = &calendar.EventReminders{
-			UseDefault: params.Reminders.UseDefault,
-		}
+		patchEvent.Reminders = &calendar.EventReminders{}
+		
 		if len(params.Reminders.Overrides) > 0 {
+			// When overrides are provided, ONLY set UseDefault=false and Overrides
+			patchEvent.Reminders.UseDefault = false
 			overrides := make([]*calendar.EventReminder, len(params.Reminders.Overrides))
 			for i, reminder := range params.Reminders.Overrides {
 				overrides[i] = &calendar.EventReminder{
@@ -522,6 +533,15 @@ func (c *Client) PatchEventDirect(eventID string, params PatchEventParams) (*cal
 				}
 			}
 			patchEvent.Reminders.Overrides = overrides
+		} else {
+			// No overrides - use the UseDefault value from params
+			patchEvent.Reminders.UseDefault = params.Reminders.UseDefault
+		}
+
+		// Force send UseDefault if it's false, otherwise it might be omitted by json encoding
+		// and the API might default it to true, causing conflicts with overrides.
+		if !patchEvent.Reminders.UseDefault {
+			patchEvent.Reminders.ForceSendFields = append(patchEvent.Reminders.ForceSendFields, "UseDefault")
 		}
 	}
 
