@@ -88,6 +88,15 @@ For each conflict group, determine which event to keep using:
 - Check eventType for focusTime events (can be moved if needed)
 - Is this a 1:1? Check if only 2 attendees
 
+**Special Case: Partial Overlap with Equal Priority**
+When two meetings have equal weight (same tier), one can't be moved, and there's partial overlap:
+- Calculate the overlap duration (e.g., Meeting B starts 30m into Meeting A which is 1hr long)
+- If partial overlap exists (not complete overlap):
+  - Suggest making the meeting that starts later (Meeting B) tentative
+  - Recommend attending both if possible, but be prepared to prioritize
+  - Advise front-loading important topics/agenda items in the first meeting (Meeting A) to ensure they're covered before the conflict
+  - Include reasoning about why attending both could be valuable (based on meeting context, attendees, etc.)
+
 ### Step 4: Find Alternative Times (for moveable meetings only)
 For small meetings (≤4 attendees) that should be rescheduled to resolve conflicts:
 - Extract attendee email addresses
@@ -114,6 +123,9 @@ For small meetings (≤4 attendees) that should be rescheduled to resolve confli
 
 3. CONFLICT at 1:00pm-2:00pm: Decline "Community Event", keep "Team Standup"
    Reason: Community tier 4 < Team tier 2. Community is lowest priority
+
+4. PARTIAL OVERLAP at 2:00pm-3:00pm: Keep "Team Planning" accepted, make "Design Review" (starts 2:30pm) tentative
+   Reason: Both Tier 2, partial overlap (30m). Attend both if possible. Front-load your topics in Team Planning to cover before 2:30pm conflict
 ```
 
 ### Step 6: Check for Back-to-Back Meeting Overload
