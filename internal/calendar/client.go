@@ -18,6 +18,7 @@ package calendar
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"time"
 
@@ -26,7 +27,8 @@ import (
 )
 
 type Client struct {
-	service *calendar.Service
+	service        *calendar.Service
+	cachedUserEmail string // cached to avoid repeated API calls
 }
 
 func NewClient(service *calendar.Service) *Client {
@@ -766,8 +768,12 @@ func isValidEmail(email string) bool {
 		emailRegex.MatchString(email)
 }
 
-// getUserEmail gets the authenticated user's email address
+// getUserEmail gets the authenticated user's email address (cached after first call)
 func (c *Client) getUserEmail() (string, error) {
+	if c.cachedUserEmail != "" {
+		return c.cachedUserEmail, nil
+	}
+
 	// Get the primary calendar to extract the user's email
 	cal, err := c.service.Calendars.Get("primary").Do()
 	if err != nil {
@@ -778,6 +784,7 @@ func (c *Client) getUserEmail() (string, error) {
 		return "", fmt.Errorf("unable to determine user email from primary calendar")
 	}
 
+	c.cachedUserEmail = cal.Id
 	return cal.Id, nil
 }
 
@@ -788,6 +795,10 @@ func (c *Client) GetCalendarColors() (*calendar.Colors, error) {
 
 // DetectOverlaps analyzes events for time overlaps and returns a map of event IDs to overlap status
 func (c *Client) DetectOverlaps(events []*calendar.Event, showDeclined bool) map[string]bool {
+	t0 := time.Now()
+	defer func() {
+		fmt.Fprintf(os.Stderr, "[TRACE] DetectOverlaps took %s for %d events\n", time.Since(t0), len(events))
+	}()
 	overlaps := make(map[string]bool)
 
 	// First, filter events based on showDeclined parameter and extract time information
