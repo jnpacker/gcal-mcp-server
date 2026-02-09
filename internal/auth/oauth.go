@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -32,9 +31,25 @@ import (
 	"google.golang.org/api/calendar/v3"
 )
 
+// AuthError represents an authentication error that may require user action
+type AuthError struct {
+	Message  string
+	AuthURL  string
+	NeedsAuth bool
+}
+
+func (e *AuthError) Error() string {
+	if e.AuthURL != "" {
+		return fmt.Sprintf("%s\n\nPlease visit the following URL to authenticate:\n%s", e.Message, e.AuthURL)
+	}
+	return e.Message
+}
+
 const (
 	credentialsFile = "credentials.json"
 	tokenFile       = "token.json"
+	// tokenExpiryBuffer is the time before actual expiry when we consider a token expired
+	tokenExpiryBuffer = 5 * time.Minute
 )
 
 // findRepositoryRoot walks up the directory tree to find the repository root
@@ -110,7 +125,10 @@ func GetCalendarService() (*calendar.Service, error) {
 		return nil, fmt.Errorf("unable to parse client secret file to config: %v", err)
 	}
 
-	client := getClient(config, tokenPath)
+	client, err := getClient(config, tokenPath)
+	if err != nil {
+		return nil, err
+	}
 
 	srv, err := calendar.New(client)
 	if err != nil {
@@ -120,24 +138,85 @@ func GetCalendarService() (*calendar.Service, error) {
 	return srv, nil
 }
 
-func getClient(config *oauth2.Config, tokenPath string) *http.Client {
+func getClient(config *oauth2.Config, tokenPath string) (*http.Client, error) {
 	tok, err := tokenFromFile(tokenPath)
 	if err != nil {
-		tok = getTokenFromWeb(config)
-		saveToken(tokenPath, tok)
+		// No token file - need to authenticate
+		tok, err = getTokenFromWeb(config)
+		if err != nil {
+			return nil, err
+		}
+		if err := saveTokenSafe(tokenPath, tok); err != nil {
+			return nil, err
+		}
+		return config.Client(context.Background(), tok), nil
 	}
-	return config.Client(context.Background(), tok)
+
+	// Check if token is valid (with buffer time)
+	if !isTokenValid(tok) {
+		// Try to refresh the token
+		newTok, err := refreshToken(config, tok)
+		if err != nil {
+			// Refresh failed - need to re-authenticate
+			fmt.Fprintf(os.Stderr, "Token expired and refresh failed: %v\n", err)
+			tok, err = getTokenFromWeb(config)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			tok = newTok
+			fmt.Fprintf(os.Stderr, "Token refreshed successfully\n")
+		}
+		if err := saveTokenSafe(tokenPath, tok); err != nil {
+			return nil, err
+		}
+	}
+
+	return config.Client(context.Background(), tok), nil
 }
 
-func getTokenFromWeb(config *oauth2.Config) *oauth2.Token {
+// isTokenValid checks if the token is valid with a buffer time before expiry
+func isTokenValid(tok *oauth2.Token) bool {
+	if tok == nil {
+		return false
+	}
+	// Check if token has an expiry time set
+	if tok.Expiry.IsZero() {
+		// No expiry set - assume valid (some tokens don't expire)
+		return tok.AccessToken != ""
+	}
+	// Check if token will expire within the buffer time
+	return time.Now().Add(tokenExpiryBuffer).Before(tok.Expiry)
+}
+
+// refreshToken attempts to refresh the token using the refresh token
+func refreshToken(config *oauth2.Config, tok *oauth2.Token) (*oauth2.Token, error) {
+	if tok.RefreshToken == "" {
+		return nil, fmt.Errorf("no refresh token available")
+	}
+
+	// Create a token source that will refresh the token
+	tokenSource := config.TokenSource(context.Background(), tok)
+
+	// Get a new token (this will use the refresh token if the access token is expired)
+	newTok, err := tokenSource.Token()
+	if err != nil {
+		return nil, fmt.Errorf("failed to refresh token: %v", err)
+	}
+
+	return newTok, nil
+}
+
+func getTokenFromWeb(config *oauth2.Config) (*oauth2.Token, error) {
 	// Set up a local server to handle the OAuth callback
 	codeCh := make(chan string)
 	errCh := make(chan error)
 
-	// Create a temporary HTTP server to handle the callback
-	server := &http.Server{Addr: ":8080"}
+	// Create a new ServeMux to avoid conflicts with previously registered handlers
+	mux := http.NewServeMux()
+	server := &http.Server{Addr: ":8080", Handler: mux}
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		code := r.URL.Query().Get("code")
 		if code == "" {
 			errCh <- fmt.Errorf("no authorization code received")
@@ -170,11 +249,9 @@ func getTokenFromWeb(config *oauth2.Config) *oauth2.Token {
 	config.RedirectURL = "http://localhost:8080"
 
 	authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
-	fmt.Printf("Opening browser for authentication...\n")
-	fmt.Printf("If the browser doesn't open automatically, go to: %v\n", authURL)
 
-	// Try to open the browser automatically
-	openBrowser(authURL)
+	// Display OAuth URL prominently to stderr (visible in MCP context)
+	displayAuthURL(authURL)
 
 	// Wait for either the code or an error
 	var authCode string
@@ -182,9 +259,25 @@ func getTokenFromWeb(config *oauth2.Config) *oauth2.Token {
 	case authCode = <-codeCh:
 		// Success - we got the code
 	case err := <-errCh:
-		log.Fatalf("OAuth error: %v", err)
+		// Shutdown the server before returning
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		server.Shutdown(ctx)
+		return nil, &AuthError{
+			Message:   fmt.Sprintf("OAuth error: %v", err),
+			AuthURL:   authURL,
+			NeedsAuth: true,
+		}
 	case <-time.After(5 * time.Minute):
-		log.Fatalf("Timeout waiting for authorization")
+		// Shutdown the server before returning
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		server.Shutdown(ctx)
+		return nil, &AuthError{
+			Message:   "Timeout waiting for authorization (5 minutes)",
+			AuthURL:   authURL,
+			NeedsAuth: true,
+		}
 	}
 
 	// Shutdown the temporary server
@@ -195,18 +288,26 @@ func getTokenFromWeb(config *oauth2.Config) *oauth2.Token {
 	// Exchange the code for a token
 	tok, err := config.Exchange(context.TODO(), authCode)
 	if err != nil {
-		log.Fatalf("Unable to retrieve token from web: %v", err)
+		return nil, &AuthError{
+			Message:   fmt.Sprintf("Unable to exchange authorization code for token: %v", err),
+			AuthURL:   authURL,
+			NeedsAuth: true,
+		}
 	}
 
-	fmt.Printf("Authentication successful!\n")
-	return tok
+	fmt.Fprintf(os.Stderr, "Authentication successful!\n")
+	return tok, nil
 }
 
-// openBrowser tries to open the URL in the default browser
-func openBrowser(url string) {
-	// This is a simple implementation - in a production system you might want
-	// to use a more sophisticated approach or a library like "github.com/pkg/browser"
-	fmt.Printf("Please visit the following URL to complete authentication:\n%s\n", url)
+// displayAuthURL prints the OAuth URL prominently to stderr
+func displayAuthURL(authURL string) {
+	fmt.Fprintf(os.Stderr, "\n===============================================\n")
+	fmt.Fprintf(os.Stderr, "  AUTHENTICATION REQUIRED\n")
+	fmt.Fprintf(os.Stderr, "===============================================\n\n")
+	fmt.Fprintf(os.Stderr, "Please visit the following URL to authenticate:\n\n")
+	fmt.Fprintf(os.Stderr, "%s\n\n", authURL)
+	fmt.Fprintf(os.Stderr, "Waiting for authentication (timeout: 5 minutes)...\n")
+	fmt.Fprintf(os.Stderr, "===============================================\n\n")
 }
 
 func tokenFromFile(file string) (*oauth2.Token, error) {
@@ -220,14 +321,18 @@ func tokenFromFile(file string) (*oauth2.Token, error) {
 	return tok, err
 }
 
-func saveToken(path string, token *oauth2.Token) {
-	fmt.Printf("Saving credential file to: %s\n", path)
+// saveTokenSafe saves the token to a file and returns an error instead of calling log.Fatalf
+func saveTokenSafe(path string, token *oauth2.Token) error {
+	fmt.Fprintf(os.Stderr, "Saving credential file to: %s\n", path)
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
-		log.Fatalf("Unable to cache oauth token: %v", err)
+		return fmt.Errorf("unable to cache oauth token: %v", err)
 	}
 	defer f.Close()
-	json.NewEncoder(f).Encode(token)
+	if err := json.NewEncoder(f).Encode(token); err != nil {
+		return fmt.Errorf("unable to encode oauth token: %v", err)
+	}
+	return nil
 }
 
 func SetupCredentials() error {

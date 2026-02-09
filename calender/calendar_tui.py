@@ -1437,6 +1437,7 @@ class CalendarTUI:
         """Background task to fetch recommendations without blocking the UI"""
         # Capture the task ID at start to check if we're still current when we finish
         my_task_id = id(asyncio.current_task())
+        process = None  # Track subprocess for cleanup on cancellation
 
         try:
             # Collect event data
@@ -1456,8 +1457,11 @@ class CalendarTUI:
             self.debug_log(f"Calling claude /recommend with {events_data['count']} events")
 
             # Use asyncio subprocess for non-blocking execution
+            # stdin=DEVNULL prevents claude from inheriting the terminal and
+            # interfering with curses' raw mode / nodelay settings
             process = await asyncio.create_subprocess_exec(
                 'claude', '/recommend', '@./'+event_prompt_file,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
@@ -1522,8 +1526,14 @@ class CalendarTUI:
                 self.recommendations_text = "❌ Claude Code CLI not found. Make sure 'claude' is in your PATH."
                 self.debug_log("claude command not found")
         except asyncio.CancelledError:
-            # Task was cancelled, don't update any state (a new task is running)
+            # Task was cancelled, kill the subprocess if still running
             self.debug_log(f"Recommendations task {my_task_id} was cancelled")
+            try:
+                if process is not None and process.returncode is None:
+                    process.kill()
+                    await process.wait()
+            except Exception:
+                pass
             raise  # Re-raise to properly handle cancellation
         except Exception as e:
             # Only update state if we're still the current task

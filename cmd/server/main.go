@@ -17,7 +17,8 @@
 package main
 
 import (
-	"log"
+	"fmt"
+	"os"
 
 	"gcal-mcp-server/internal/auth"
 	"gcal-mcp-server/internal/calendar"
@@ -28,7 +29,8 @@ func main() {
 	// Setup Google Calendar service
 	calendarService, err := auth.GetCalendarService()
 	if err != nil {
-		log.Fatalf("Unable to retrieve Calendar client: %v", err)
+		fmt.Fprintf(os.Stderr, "Unable to retrieve Calendar client: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Create calendar client and tools
@@ -49,6 +51,7 @@ func main() {
 
 	// Run the server
 	if err := server.Run(); err != nil {
-		log.Fatalf("Server error: %v", err)
+		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
+		os.Exit(1)
 	}
 }
