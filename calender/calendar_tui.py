@@ -93,6 +93,11 @@ class CalendarEvent:
             self.start_time = self._parse_time(self.start)
             self.end_time = self._parse_time(self.end)
 
+    @property
+    def can_rsvp(self) -> bool:
+        """Check if the user can RSVP to this event (is listed as an attendee)"""
+        return any(a.get('self', False) for a in self.attendees)
+
     def _generate_available_summary(self) -> str:
         """Generate summary for available slots with visual boxes"""
         if not self.start_time or not self.end_time:
@@ -183,6 +188,10 @@ class CalendarEvent:
                 return '📍'
             else:
                 return '📍'  # Default location marker
+
+        # Non-RSVP-able events (no self-attendee) get a distinct icon
+        if not self.can_rsvp:
+            return '📌'
 
         status_map = {
             'accepted': '✅',
@@ -1900,19 +1909,14 @@ class CalendarTUI:
                 if self.current_row >= self.scroll_offset + max_rows:
                     self.scroll_offset = self.current_row - max_rows + 1
 
-    async def delete_focus_time(self):
-        """Delete a focus time event (optimistic update)"""
+    async def delete_event(self, success_message="✅ Event deleted"):
+        """Delete an event with optimistic update (used for focus time and non-RSVP-able events)"""
         filtered_events = self.get_filtered_events()
         if not filtered_events or self.current_row >= len(filtered_events):
             self.status_message = "No event selected"
             return
 
         event = filtered_events[self.current_row]
-
-        # Check if it's a focus time event
-        if event.event_type != 'focusTime':
-            self.status_message = "Only focus time events can be deleted with 'd'"
-            return
 
         if not event.id:
             self.status_message = "Event has no ID, cannot delete"
@@ -1930,7 +1934,7 @@ class CalendarTUI:
         event_id = event.id
         self.events = [e for e in self.events if e.id != event_id]
         self._insert_available_slots()
-        self.status_message = "✅ Focus time deleted"
+        self.status_message = success_message
 
         # Async: Delete on server in background
         asyncio.create_task(self._delete_event_background(event_id, event_date))
@@ -2785,7 +2789,15 @@ class CalendarTUI:
                         needs_redraw = True
                     elif event.event_type == 'focusTime':
                         # Delete focus time - optimistic update (instant, no spinner)
-                        await self.delete_focus_time()
+                        await self.delete_event("✅ Focus time deleted")
+                        needs_redraw = True
+                    elif event.is_available:
+                        # Available slots cannot be declined or deleted
+                        self.status_message = "❌ Cannot delete available time slots"
+                        needs_redraw = True
+                    elif not event.can_rsvp:
+                        # No self-attendee - can't decline, delete instead
+                        await self.delete_event("✅ Event deleted")
                         needs_redraw = True
                     else:
                         # Decline regular event - optimistic update (instant, no spinner)
