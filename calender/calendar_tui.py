@@ -2791,6 +2791,10 @@ class CalendarTUI:
                         # Delete focus time - optimistic update (instant, no spinner)
                         await self.delete_event("✅ Focus time deleted")
                         needs_redraw = True
+                    elif event.is_available:
+                        # Available slots cannot be declined or deleted
+                        self.status_message = "❌ Cannot delete available time slots"
+                        needs_redraw = True
                     elif not event.can_rsvp:
                         # No self-attendee - can't decline, delete instead
                         await self.delete_event("✅ Event deleted")
