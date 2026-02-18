@@ -109,6 +109,8 @@ func getCredentialPaths() (string, string, error) {
 	return credPath, tokenPath, nil
 }
 
+// GetCalendarService creates and returns a new Google Calendar API service client.
+// It handles OAuth authentication and token management automatically.
 func GetCalendarService() (*calendar.Service, error) {
 	credPath, tokenPath, err := getCredentialPaths()
 	if err != nil {
@@ -335,6 +337,7 @@ func saveTokenSafe(path string, token *oauth2.Token) error {
 	return nil
 }
 
+// SetupCredentials verifies that required OAuth credentials are available and sets up authentication.
 func SetupCredentials() error {
 	credPath, tokenPath, err := getCredentialPaths()
 	if err != nil {

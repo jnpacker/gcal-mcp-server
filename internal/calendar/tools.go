@@ -31,12 +31,14 @@ type CalendarTools struct {
 	client *Client
 }
 
+// NewCalendarTools creates a new CalendarTools instance with the given Calendar client.
 func NewCalendarTools(client *Client) *CalendarTools {
 	return &CalendarTools{
 		client: client,
 	}
 }
 
+// GetTools returns a slice of MCP tools for calendar operations.
 func (ct *CalendarTools) GetTools() []mcp.Tool {
 	return []mcp.Tool{
 		{
@@ -465,6 +467,7 @@ func (ct *CalendarTools) GetTools() []mcp.Tool {
 	}
 }
 
+// HandleTool dispatches tool calls to the appropriate handler based on the tool name.
 func (ct *CalendarTools) HandleTool(name string, arguments map[string]interface{}) (*mcp.CallToolResult, error) {
 	switch name {
 	case "create_event":
@@ -1009,7 +1012,7 @@ func (ct *CalendarTools) formatColorsResult(colors interface{}) string {
 	return result.String()
 }
 
-// Helper functions
+// getStringOrDefault retrieves a string value from the arguments map or returns a default value.
 func getStringOrDefault(args map[string]interface{}, key, defaultValue string) string {
 	if val, ok := args[key].(string); ok {
 		return val
@@ -1017,6 +1020,7 @@ func getStringOrDefault(args map[string]interface{}, key, defaultValue string) s
 	return defaultValue
 }
 
+// getBoolOrDefault retrieves a boolean value from the arguments map or returns a default value.
 func getBoolOrDefault(args map[string]interface{}, key string, defaultValue bool) bool {
 	if val, ok := args[key].(bool); ok {
 		return val
@@ -1024,6 +1028,7 @@ func getBoolOrDefault(args map[string]interface{}, key string, defaultValue bool
 	return defaultValue
 }
 
+// getIntOrDefault retrieves an integer value from the arguments map or returns a default value.
 func getIntOrDefault(args map[string]interface{}, key string, defaultValue int) int {
 	if val, ok := args[key].(float64); ok {
 		return int(val)

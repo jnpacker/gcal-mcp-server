@@ -31,6 +31,7 @@ type Client struct {
 	cachedUserEmail string // cached to avoid repeated API calls
 }
 
+// NewClient creates a new Calendar API client with the given Google Calendar service.
 func NewClient(service *calendar.Service) *Client {
 	return &Client{
 		service: service,
@@ -165,6 +166,7 @@ type EventWithOverlap struct {
 	HasOverlap bool `json:"has_overlap"`
 }
 
+// CreateEvent creates a new calendar event with the provided parameters.
 func (c *Client) CreateEvent(params EventParams) (*calendar.Event, error) {
 	if params.CalendarID == "" {
 		params.CalendarID = "primary"
@@ -332,6 +334,7 @@ func (c *Client) CreateEvent(params EventParams) (*calendar.Event, error) {
 	return call.Do()
 }
 
+// PatchEvent updates an existing calendar event with the provided parameters.
 func (c *Client) PatchEvent(eventID string, params EventParams) (*calendar.Event, error) {
 	// Convert EventParams to PatchEventParams for backward compatibility
 	patchParams := PatchEventParams{
@@ -395,6 +398,7 @@ func (c *Client) PatchEvent(eventID string, params EventParams) (*calendar.Event
 	return c.PatchEventDirect(eventID, patchParams)
 }
 
+// PatchEventDirect updates an event with fine-grained field tracking using PatchEventParams.
 func (c *Client) PatchEventDirect(eventID string, params PatchEventParams) (*calendar.Event, error) {
 	if params.CalendarID == "" {
 		params.CalendarID = "primary"
@@ -577,6 +581,7 @@ func (c *Client) PatchEventDirect(eventID string, params PatchEventParams) (*cal
 	return call.Do()
 }
 
+// DeleteEvent removes a calendar event by its ID.
 func (c *Client) DeleteEvent(calendarID, eventID string, sendNotifications bool) error {
 	if calendarID == "" {
 		calendarID = "primary"
@@ -590,6 +595,7 @@ func (c *Client) DeleteEvent(calendarID, eventID string, sendNotifications bool)
 	return call.Do()
 }
 
+// GetEvent retrieves a specific calendar event by its ID.
 func (c *Client) GetEvent(calendarID, eventID string) (*calendar.Event, error) {
 	if calendarID == "" {
 		calendarID = "primary"
@@ -601,6 +607,7 @@ func (c *Client) GetEvent(calendarID, eventID string) (*calendar.Event, error) {
 	return getCall.Do()
 }
 
+// SearchAttendees performs a simplified attendee search based on email validation.
 func (c *Client) SearchAttendees(params AttendeeSearchParams) ([]string, error) {
 	// This is a simplified implementation since Google Calendar API doesn't have
 	// a direct attendee search. In practice, you might want to integrate with
@@ -619,6 +626,7 @@ func (c *Client) SearchAttendees(params AttendeeSearchParams) ([]string, error) 
 	return []string{}, fmt.Errorf("attendee search not implemented - please provide full email addresses")
 }
 
+// GetFreeBusy retrieves free/busy information for the specified attendees during a time period.
 func (c *Client) GetFreeBusy(params FreeBusyParams) (*calendar.FreeBusyResponse, error) {
 	if params.TimeZone == "" {
 		params.TimeZone = "UTC"
@@ -647,6 +655,7 @@ func (c *Client) GetFreeBusy(params FreeBusyParams) (*calendar.FreeBusyResponse,
 	return c.service.Freebusy.Query(request).Do()
 }
 
+// ListEvents retrieves calendar events based on the provided filter parameters.
 func (c *Client) ListEvents(params ListEventsParams) (*calendar.Events, error) {
 	if params.CalendarID == "" {
 		params.CalendarID = "primary"
@@ -706,6 +715,7 @@ func (c *Client) ListEvents(params ListEventsParams) (*calendar.Events, error) {
 	return events, nil
 }
 
+// calculateTimeRange computes the start and end times for a given time filter and timezone.
 func calculateTimeRange(timeFilter string, customMin, customMax time.Time, timezone string) (time.Time, time.Time) {
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
@@ -761,6 +771,7 @@ func calculateTimeRange(timeFilter string, customMin, customMax time.Time, timez
 // Simple email regex for validation
 var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
 
+// isValidEmail checks if a string is a valid email address.
 func isValidEmail(email string) bool {
 	// Simple email validation
 	return len(email) > 0 &&

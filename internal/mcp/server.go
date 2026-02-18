@@ -33,6 +33,7 @@ type ToolHandler interface {
 	HandleTool(name string, arguments map[string]interface{}) (*CallToolResult, error)
 }
 
+// NewServer creates a new MCP server instance with the given tool handler.
 func NewServer(handler ToolHandler) *Server {
 	return &Server{
 		tools:   make(map[string]Tool),
@@ -40,10 +41,12 @@ func NewServer(handler ToolHandler) *Server {
 	}
 }
 
+// RegisterTool registers a tool with the server.
 func (s *Server) RegisterTool(tool Tool) {
 	s.tools[tool.Name] = tool
 }
 
+// Run starts the MCP server and listens for incoming JSON-RPC requests on stdin.
 func (s *Server) Run() error {
 	scanner := bufio.NewScanner(os.Stdin)
 
@@ -227,6 +230,7 @@ func boolPtr(b bool) *bool {
 	return &b
 }
 
+// LogToStderr writes a formatted message to stderr with a newline.
 func (s *Server) LogToStderr(format string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, format+"\n", args...)
 }
