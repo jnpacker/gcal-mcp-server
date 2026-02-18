@@ -20,35 +20,46 @@ reviews:
     - "!doc/**"
     - "!examples/**"
   path_instructions:
-    - path: "jira_mcp_server/server.py"
+    - path: "internal/mcp/server.go"
       instructions: |
-        This is the MCP server definition with all tool registrations.
+        MCP server implementation with tool registrations.
         Pay close attention to:
-        - Correct parameter validation and types
-        - Proper error handling for Jira API calls
-        - Security: no credential leakage in error messages or logs
-        - Rate limiting compliance
-    - path: "jira_mcp_server/client.py"
+        - Proper error handling and logging
+        - Correct tool registration and handler dispatch
+        - Security: no credential leakage in error messages
+        - Compliance with MCP protocol standards
+    - path: "internal/calendar/client.go"
       instructions: |
-        This is the async Jira API client with rate limiting.
+        Google Calendar API client implementation.
         Review for:
-        - Proper async/await usage
-        - Rate limiting correctness
-        - Error handling and retries
-        - No blocking calls in async context
-    - path: "jira_mcp_server/config.py"
+        - Proper error handling and retry logic
+        - Correct OAuth token management
+        - API request/response handling
+        - Memory efficiency for batch operations
+    - path: "internal/calendar/tools.go"
       instructions: |
-        Pydantic configuration models.
+        MCP tools for calendar operations.
         Ensure:
-        - Sensitive fields (tokens, passwords) are not exposed in repr/logs
-        - Validation rules are correct
-        - Defaults are sensible
-    - path: "tests/**"
+        - Accurate parameter validation and type handling
+        - Proper JSON serialization of calendar events
+        - Correct attendee and event data formatting
+        - Helper functions are properly documented
+    - path: "internal/auth/oauth.go"
       instructions: |
-        Review tests for:
-        - Adequate coverage of edge cases
-        - Proper use of pytest fixtures and pytest-asyncio
-        - No hardcoded credentials or real Jira URLs
+        OAuth authentication and credential handling.
+        Review for:
+        - Secure credential management
+        - Proper error handling for auth failures
+        - No sensitive data in logs
+        - Correct OAuth flow implementation
+    - path: "calender/calendar_tui.py"
+      instructions: |
+        Python TUI for calendar interaction.
+        Review for:
+        - Proper text wrapping and truncation
+        - Correct modal rendering and layout
+        - HTML tag stripping for display
+        - UI responsiveness and error handling
   tools:
     ruff:
       enabled: true

@@ -12,6 +12,7 @@ import json
 import asyncio
 import os
 import re
+import html
 import subprocess
 from datetime import datetime, timedelta, timezone, date
 from typing import List, Dict, Optional
@@ -1275,9 +1276,11 @@ class CalendarTUI:
 
             current_y = start_y + 1
 
-            def draw_modal_line(text, attr=curses.color_pair(1), pad_left=2):
+            def draw_modal_line(text, attr=None, pad_left=2):
                 """Helper to draw a single line in the modal"""
                 nonlocal current_y
+                if attr is None:
+                    attr = curses.color_pair(1)
                 if current_y >= start_y + modal_height - 2:
                     return
                 self.stdscr.addstr(current_y, start_x, "║", curses.color_pair(1))
@@ -1325,7 +1328,7 @@ class CalendarTUI:
                 draw_separator()
                 # Strip HTML tags for display
                 clean_desc = re.sub(r'<[^>]+>', ' ', description)
-                clean_desc = clean_desc.replace('&nbsp;', ' ').replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+                clean_desc = html.unescape(clean_desc)
                 clean_desc = re.sub(r'\s+', ' ', clean_desc).strip()
 
                 desc_max = modal_width - 6
