@@ -18,6 +18,8 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -50,7 +52,20 @@ const (
 	tokenFile       = "token.json"
 	// tokenExpiryBuffer is the time before actual expiry when we consider a token expired
 	tokenExpiryBuffer = 5 * time.Minute
+	// stateTokenLength is the length in bytes of the random state token
+	stateTokenLength = 32
 )
+
+// generateStateToken generates a cryptographically secure random state token
+// encoded in base64 for use in OAuth2 flows
+func generateStateToken() (string, error) {
+	b := make([]byte, stateTokenLength)
+	_, err := rand.Read(b)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate state token: %v", err)
+	}
+	return base64.StdEncoding.EncodeToString(b), nil
+}
 
 // findRepositoryRoot walks up the directory tree to find the repository root
 // by looking for go.mod file or .git directory
@@ -250,7 +265,16 @@ func getTokenFromWeb(config *oauth2.Config) (*oauth2.Token, error) {
 	// Update config to use localhost:8080 as redirect URI
 	config.RedirectURL = "http://localhost:8080"
 
-	authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
+	// Generate a secure random state token
+	stateToken, err := generateStateToken()
+	if err != nil {
+		return nil, &AuthError{
+			Message:   fmt.Sprintf("Failed to generate state token: %v", err),
+			NeedsAuth: true,
+		}
+	}
+
+	authURL := config.AuthCodeURL(stateToken, oauth2.AccessTypeOffline)
 
 	// Display OAuth URL prominently to stderr (visible in MCP context)
 	displayAuthURL(authURL)
