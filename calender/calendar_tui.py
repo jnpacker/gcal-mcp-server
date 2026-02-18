@@ -2676,6 +2676,7 @@ class CalendarTUI:
                             self.attendee_details_event = event
                         else:
                             self.status_message = "No details for available slots"
+                            self.update_status_line()
                             needs_redraw = False
             elif key == 27:  # ESC key
                 # Close attendee details or recommendations if showing
