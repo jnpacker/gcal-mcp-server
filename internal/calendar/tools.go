@@ -1177,6 +1177,7 @@ func (ct *CalendarTools) formatEventsJSON(events *calendar.Events, params ListEv
 			for _, attendee := range event.Attendees {
 				attendeeJSON := make(map[string]interface{})
 				attendeeJSON["email"] = attendee.Email
+				attendeeJSON["displayName"] = attendee.DisplayName
 				attendeeJSON["responseStatus"] = attendee.ResponseStatus
 				attendeeJSON["self"] = attendee.Self
 				attendeeJSON["organizer"] = attendee.Organizer
