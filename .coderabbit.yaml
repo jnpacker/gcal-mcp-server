@@ -1,2 +1,78 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: en-US
+
 reviews:
-  request_changes_workflow: true
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  high_level_summary_placeholder: "@coderabbitai summary"
+  auto_title_placeholder: "@coderabbitai"
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  sequence_diagrams: true
+  changed_files_summary: true
+  labeling_instructions: []
+  path_filters:
+    - "!**/*.lock"
+    - "!**/*.md"
+    - "!doc/**"
+    - "!examples/**"
+  path_instructions:
+    - path: "internal/mcp/server.go"
+      instructions: |
+        MCP server implementation with tool registrations.
+        Pay close attention to:
+        - Proper error handling and logging
+        - Correct tool registration and handler dispatch
+        - Security: no credential leakage in error messages
+        - Compliance with MCP protocol standards
+    - path: "internal/calendar/client.go"
+      instructions: |
+        Google Calendar API client implementation.
+        Review for:
+        - Proper error handling and retry logic
+        - Correct OAuth token management
+        - API request/response handling
+        - Memory efficiency for batch operations
+    - path: "internal/calendar/tools.go"
+      instructions: |
+        MCP tools for calendar operations.
+        Ensure:
+        - Accurate parameter validation and type handling
+        - Proper JSON serialization of calendar events
+        - Correct attendee and event data formatting
+        - Helper functions are properly documented
+    - path: "internal/auth/oauth.go"
+      instructions: |
+        OAuth authentication and credential handling.
+        Review for:
+        - Secure credential management
+        - Proper error handling for auth failures
+        - No sensitive data in logs
+        - Correct OAuth flow implementation
+    - path: "calender/calendar_tui.py"
+      instructions: |
+        Python TUI for calendar interaction.
+        Review for:
+        - Proper text wrapping and truncation
+        - Correct modal rendering and layout
+        - HTML tag stripping for display
+        - UI responsiveness and error handling
+  tools:
+    ruff:
+      enabled: true
+    shellcheck:
+      enabled: true
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  learnings:
+    scope: auto
+  jira:
+    project_keys: []
+  linear:
+    team_keys: []

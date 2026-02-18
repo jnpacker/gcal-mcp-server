@@ -11,6 +11,8 @@ import curses
 import json
 import asyncio
 import os
+import re
+import html
 import subprocess
 from datetime import datetime, timedelta, timezone, date
 from typing import List, Dict, Optional
@@ -67,11 +69,14 @@ class CalendarEvent:
             self.attendees = event_data.get('attendees', [])
             self.event_type = event_data.get('eventType', 'default')
 
+            # Store description and location
+            self.description = event_data.get('description', '')
+            self.location = event_data.get('location', '')
+
             # Google Tasks appear as focusTime events but have tasks.google.com in description
             # Detect and reclassify them as 'task' type
             if self.event_type == 'focusTime':
-                description = event_data.get('description', '')
-                if 'tasks.google.com/task/' in description:
+                if 'tasks.google.com/task/' in self.description:
                     self.event_type = 'task'
 
             # Extract hangout/meet link
@@ -1213,7 +1218,7 @@ class CalendarTUI:
             current_y += 1
 
     def draw_attendee_details(self):
-        """Draw attendee details overlay for selected event"""
+        """Draw event details overlay for selected event"""
         if not self.attendee_details_event:
             return
 
@@ -1264,30 +1269,86 @@ class CalendarTUI:
             # Top border
             self.stdscr.addstr(start_y, start_x, "╔" + "═" * (modal_width - 2) + "╗", curses.color_pair(1) | curses.A_BOLD)
 
-            # Title
-            title = f" Attendees for {event.summary[:40]} "
+            # Title bar
+            title = f" Event Details "
             title_x = start_x + (modal_width - len(title)) // 2
             self.stdscr.addstr(start_y, title_x, title, curses.color_pair(1) | curses.A_BOLD)
 
             current_y = start_y + 1
 
-            # Visual status bar chart
-            if total > 0:
-                self.stdscr.addstr(current_y, start_x, "║" + " " * (modal_width - 2) + "║", curses.color_pair(1))
-                current_y += 1
-
-                # Calculate percentages
-                accepted_pct = (len(accepted) / total) * 100
-                declined_pct = (len(declined) / total) * 100
-                tentative_pct = (len(tentative) / total) * 100
-                no_response_pct = (len(no_response) / total) * 100
-
-                # Draw status summary
-                summary = f"  Total: {total} | ✅ {len(accepted)} | ❌ {len(declined)} | ⏳ {len(tentative)} | ❓ {len(no_response)}"
+            def draw_modal_line(text, attr=None, pad_left=2):
+                """Helper to draw a single line in the modal"""
+                nonlocal current_y
+                if attr is None:
+                    attr = curses.color_pair(1)
+                if current_y >= start_y + modal_height - 2:
+                    return
                 self.stdscr.addstr(current_y, start_x, "║", curses.color_pair(1))
-                self.stdscr.addstr(current_y, start_x + 1, summary.ljust(modal_width - 2), curses.color_pair(1) | curses.A_BOLD)
+                content = (" " * pad_left + text).ljust(modal_width - 2)[:modal_width - 2]
+                self.stdscr.addstr(current_y, start_x + 1, content, attr)
                 self.stdscr.addstr(current_y, start_x + modal_width - 1, "║", curses.color_pair(1))
                 current_y += 1
+
+            def draw_separator():
+                nonlocal current_y
+                if current_y >= start_y + modal_height - 2:
+                    return
+                self.stdscr.addstr(current_y, start_x, "║" + "─" * (modal_width - 2) + "║", curses.color_pair(1))
+                current_y += 1
+
+            # Event title (full, possibly multi-line)
+            draw_modal_line("")
+            summary = event.summary or "No Title"
+            max_title_len = modal_width - 6
+            if len(summary) <= max_title_len:
+                draw_modal_line(summary, curses.color_pair(1) | curses.A_BOLD)
+            else:
+                # Wrap long titles
+                draw_modal_line(summary[:max_title_len], curses.color_pair(1) | curses.A_BOLD)
+                draw_modal_line(summary[max_title_len:max_title_len * 2], curses.color_pair(1) | curses.A_BOLD)
+
+            # Time
+            if event.start_time and event.end_time:
+                time_str = f"{event.start_time.strftime('%a %b %d, %H:%M')} - {event.end_time.strftime('%H:%M')}"
+                draw_modal_line(time_str, curses.color_pair(1) | curses.A_DIM)
+
+            # Location
+            location = getattr(event, 'location', '')
+            if location:
+                draw_modal_line("")
+                loc_label = "Location: "
+                loc_max = modal_width - 6 - len(loc_label)
+                draw_modal_line(loc_label + location[:loc_max], curses.color_pair(1))
+                if len(location) > loc_max:
+                    draw_modal_line("  " + location[loc_max:loc_max * 2], curses.color_pair(1))
+
+            # Description
+            description = getattr(event, 'description', '')
+            if description:
+                draw_separator()
+                # Strip HTML tags for display
+                clean_desc = re.sub(r'<[^>]+>', ' ', description)
+                clean_desc = html.unescape(clean_desc)
+                clean_desc = re.sub(r'\s+', ' ', clean_desc).strip()
+
+                desc_max = modal_width - 6
+                # Show up to 4 lines of description
+                desc_lines = 0
+                while clean_desc and desc_lines < 4:
+                    line = clean_desc[:desc_max]
+                    draw_modal_line(line, curses.color_pair(1) | curses.A_DIM)
+                    clean_desc = clean_desc[desc_max:].strip()
+                    desc_lines += 1
+                if clean_desc:
+                    draw_modal_line("...", curses.color_pair(1) | curses.A_DIM)
+
+            # Attendees section
+            if total > 0:
+                draw_separator()
+
+                # Status summary
+                summary_line = f"Attendees ({total}): ✅ {len(accepted)}  ❌ {len(declined)}  ⏳ {len(tentative)}  ❓ {len(no_response)}"
+                draw_modal_line(summary_line, curses.color_pair(1) | curses.A_BOLD)
 
                 # Visual bar chart
                 bar_width = modal_width - 6
@@ -1296,81 +1357,51 @@ class CalendarTUI:
                 tentative_bars = int((len(tentative) / total) * bar_width)
                 no_response_bars = bar_width - accepted_bars - declined_bars - tentative_bars
 
-                self.stdscr.addstr(current_y, start_x, "║", curses.color_pair(1))
-                bar_x = start_x + 3
-
-                # Green bars for accepted
-                if accepted_bars > 0:
-                    self.stdscr.addstr(current_y, bar_x, "█" * accepted_bars, curses.color_pair(3))
-                    bar_x += accepted_bars
-
-                # Red bars for declined
-                if declined_bars > 0:
-                    self.stdscr.addstr(current_y, bar_x, "█" * declined_bars, curses.color_pair(2))
-                    bar_x += declined_bars
-
-                # Yellow bars for tentative
-                if tentative_bars > 0:
-                    self.stdscr.addstr(current_y, bar_x, "█" * tentative_bars, curses.color_pair(4))
-                    bar_x += tentative_bars
-
-                # Grey bars for no response
-                if no_response_bars > 0:
-                    self.stdscr.addstr(current_y, bar_x, "█" * no_response_bars, curses.color_pair(5))
-
-                self.stdscr.addstr(current_y, start_x + modal_width - 1, "║", curses.color_pair(1))
-                current_y += 1
-
-                # Separator
-                self.stdscr.addstr(current_y, start_x, "║" + "─" * (modal_width - 2) + "║", curses.color_pair(1))
-                current_y += 1
-
-            # List attendees grouped by status
-            max_list_height = modal_height - (current_y - start_y) - 3
-            attendee_y = 0
-
-            def draw_attendee_group(title, attendees_list, emoji, color_pair):
-                nonlocal current_y, attendee_y
-                if not attendees_list or attendee_y >= max_list_height:
-                    return
-
-                # Group header
-                if attendee_y < max_list_height:
+                if current_y < start_y + modal_height - 2:
                     self.stdscr.addstr(current_y, start_x, "║", curses.color_pair(1))
-                    header = f"  {emoji} {title} ({len(attendees_list)})"
-                    self.stdscr.addstr(current_y, start_x + 1, header.ljust(modal_width - 2), color_pair | curses.A_BOLD)
+                    bar_x = start_x + 3
+
+                    if accepted_bars > 0:
+                        self.stdscr.addstr(current_y, bar_x, "█" * accepted_bars, curses.color_pair(3))
+                        bar_x += accepted_bars
+                    if declined_bars > 0:
+                        self.stdscr.addstr(current_y, bar_x, "█" * declined_bars, curses.color_pair(2))
+                        bar_x += declined_bars
+                    if tentative_bars > 0:
+                        self.stdscr.addstr(current_y, bar_x, "█" * tentative_bars, curses.color_pair(4))
+                        bar_x += tentative_bars
+                    if no_response_bars > 0:
+                        self.stdscr.addstr(current_y, bar_x, "█" * no_response_bars, curses.color_pair(5))
+
                     self.stdscr.addstr(current_y, start_x + modal_width - 1, "║", curses.color_pair(1))
                     current_y += 1
-                    attendee_y += 1
 
-                # List attendees
-                for att in attendees_list:
-                    if attendee_y >= max_list_height:
-                        break
+                draw_separator()
 
-                    self.stdscr.addstr(current_y, start_x, "║", curses.color_pair(1))
+                # List attendees grouped by status
+                def draw_attendee_group(title, attendees_list, emoji, color_pair):
+                    nonlocal current_y
+                    rows_left = start_y + modal_height - 2 - current_y
+                    if not attendees_list or rows_left <= 0:
+                        return
 
-                    # Format: Name (email) with "You" indicator
-                    name = att['name'][:30]
-                    email = att['email'][:40] if att['email'] != att['name'] else ""
+                    # Group header
+                    draw_modal_line(f"{emoji} {title} ({len(attendees_list)})", color_pair | curses.A_BOLD)
 
-                    if att['is_self']:
-                        line = f"    • {name} (You)"
-                    elif email:
-                        line = f"    • {name}"
-                    else:
-                        line = f"    • {name}"
+                    for att in attendees_list:
+                        if current_y >= start_y + modal_height - 3:
+                            break
+                        name = att['name'][:30]
+                        if att['is_self']:
+                            line = f"  • {name} (You)"
+                        else:
+                            line = f"  • {name}"
+                        draw_modal_line(line, color_pair, pad_left=4)
 
-                    self.stdscr.addstr(current_y, start_x + 1, line.ljust(modal_width - 2)[:modal_width - 2], color_pair)
-                    self.stdscr.addstr(current_y, start_x + modal_width - 1, "║", curses.color_pair(1))
-                    current_y += 1
-                    attendee_y += 1
-
-            # Draw each group
-            draw_attendee_group("Accepted", accepted, "✅", curses.color_pair(3))
-            draw_attendee_group("Tentative", tentative, "⏳", curses.color_pair(4))
-            draw_attendee_group("No Response", no_response, "❓", curses.color_pair(5))
-            draw_attendee_group("Declined", declined, "❌", curses.color_pair(2))
+                draw_attendee_group("Accepted", accepted, "✅", curses.color_pair(3))
+                draw_attendee_group("Tentative", tentative, "⏳", curses.color_pair(4))
+                draw_attendee_group("No Response", no_response, "❓", curses.color_pair(5))
+                draw_attendee_group("Declined", declined, "❌", curses.color_pair(2))
 
             # Fill remaining space
             while current_y < start_y + modal_height - 2:
@@ -2639,12 +2670,13 @@ class CalendarTUI:
                     filtered_events = self.get_filtered_events()
                     if filtered_events and self.current_row < len(filtered_events):
                         event = filtered_events[self.current_row]
-                        # Only show if event has attendees and is not an available slot
-                        if not event.is_available and event.attendees:
+                        # Show event details for any non-available event
+                        if not event.is_available:
                             self.show_attendee_details = True
                             self.attendee_details_event = event
                         else:
-                            self.status_message = "No attendees for this event"
+                            self.status_message = "No details for available slots"
+                            self.update_status_line()
                             needs_redraw = False
             elif key == 27:  # ESC key
                 # Close attendee details or recommendations if showing
