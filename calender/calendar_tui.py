@@ -1258,7 +1258,6 @@ class CalendarTUI:
                 no_response.append(attendee_info)
 
         total = len(event.attendees)
-        content_width = modal_width - 4  # usable width inside borders + padding
 
         # Draw modal background
         try:
@@ -1377,8 +1376,6 @@ class CalendarTUI:
                 draw_separator()
 
                 # List attendees grouped by status
-                max_list_height = modal_height - (current_y - start_y) - 3
-
                 def draw_attendee_group(title, attendees_list, emoji, color_pair):
                     nonlocal current_y
                     rows_left = start_y + modal_height - 2 - current_y
