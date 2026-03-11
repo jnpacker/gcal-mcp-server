@@ -337,6 +337,39 @@ func (ct *CalendarTools) GetTools() []mcp.Tool {
 			},
 		},
 		{
+			Name:        "set_working_location",
+			Description: "Create, change, or remove a working location indicator on the calendar. Working location events are all-day markers that show whether you are working from home or the office.",
+			InputSchema: mcp.ToolSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"action": map[string]interface{}{
+						"type":        "string",
+						"description": "Operation to perform: 'create' a new working location, 'change' an existing one, or 'remove' one",
+						"enum":        []string{"create", "change", "remove"},
+					},
+					"calendar_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Calendar ID (defaults to 'primary')",
+						"default":     "primary",
+					},
+					"event_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Event ID of the existing working location event (required for 'change' and 'remove')",
+					},
+					"date": map[string]interface{}{
+						"type":        "string",
+						"description": "Date for the working location in YYYY-MM-DD format (required for 'create')",
+					},
+					"location_type": map[string]interface{}{
+						"type":        "string",
+						"description": "Working location type (required for 'create' and 'change')",
+						"enum":        []string{"homeOffice", "officeLocation"},
+					},
+				},
+				Required: []string{"action"},
+			},
+		},
+		{
 			Name:        "get_calendar_colors",
 			Description: "Get available calendar and event colors with their IDs and names/labels.",
 			InputSchema: mcp.ToolSchema{
@@ -476,6 +509,8 @@ func (ct *CalendarTools) HandleTool(name string, arguments map[string]interface{
 		return ct.handleEditEvent(arguments)
 	case "delete_event":
 		return ct.handleDeleteEvent(arguments)
+	case "set_working_location":
+		return ct.handleSetWorkingLocation(arguments)
 	case "get_calendar_colors":
 		return ct.handleGetCalendarColors(arguments)
 	case "search_attendees":
@@ -589,6 +624,64 @@ func (ct *CalendarTools) handleDeleteEvent(arguments map[string]interface{}) (*m
 	result := fmt.Sprintf("✅ Event '%s' deleted successfully", eventTitle)
 	if sendNotifications {
 		result += " (cancellation notifications sent to attendees)"
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.ToolResult{{
+			Type: "text",
+			Text: result,
+		}},
+	}, nil
+}
+
+func (ct *CalendarTools) handleSetWorkingLocation(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
+	action := getStringOrDefault(arguments, "action", "")
+	if action == "" {
+		return nil, fmt.Errorf("action is required ('create', 'change', or 'remove')")
+	}
+
+	params := SetWorkingLocationParams{
+		CalendarID:   getStringOrDefault(arguments, "calendar_id", "primary"),
+		Action:       action,
+		EventID:      getStringOrDefault(arguments, "event_id", ""),
+		Date:         getStringOrDefault(arguments, "date", ""),
+		LocationType: getStringOrDefault(arguments, "location_type", ""),
+	}
+
+	switch action {
+	case "change", "remove":
+		if params.EventID == "" {
+			return nil, fmt.Errorf("event_id is required for action '%s'", action)
+		}
+	case "create":
+		if params.Date == "" {
+			return nil, fmt.Errorf("date is required for action 'create'")
+		}
+		if params.LocationType == "" {
+			return nil, fmt.Errorf("location_type is required for action 'create'")
+		}
+	}
+
+	if err := ct.client.SetWorkingLocation(params); err != nil {
+		return nil, fmt.Errorf("failed to %s working location: %v", action, err)
+	}
+
+	locName := map[string]string{
+		"homeOffice":     "Home",
+		"officeLocation": "Office",
+	}[params.LocationType]
+	if locName == "" {
+		locName = params.LocationType
+	}
+
+	var result string
+	switch action {
+	case "create":
+		result = fmt.Sprintf("✅ Working location created: %s on %s", locName, params.Date)
+	case "change":
+		result = fmt.Sprintf("✅ Working location changed to: %s", locName)
+	case "remove":
+		result = "✅ Working location removed"
 	}
 
 	return &mcp.CallToolResult{

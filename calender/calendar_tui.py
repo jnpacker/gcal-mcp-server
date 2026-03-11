@@ -570,12 +570,12 @@ class CalendarTUI:
             events_list = data.get('events', [])
             self.events = [CalendarEvent(e, core_start_hour=self.core_start_hour, core_end_hour=self.core_end_hour) for e in events_list]
 
-            # Filter out all-day events that started before today
+            # Filter out all-day events that started before today,
+            # but keep working location events (they are all-day but should show on past days)
             today = datetime.now().date()
             filtered_events = []
             for event in self.events:
-                # Skip all-day events that started before today
-                if event.is_all_day and event.start_time:
+                if event.is_all_day and event.event_type != 'workingLocation' and event.start_time:
                     event_date = event.start_time.date()
                     if event_date < today:
                         continue  # Skip this event
@@ -1841,7 +1841,8 @@ class CalendarTUI:
             self._are_recommendations_valid_for_current_view()):
             recommendations_indicator = "💡 "  # Lightbulb emoji indicates recommendations are ready
 
-        help_text = f"↑/↓: Navigate | ←/→: Prev/Next Day | 1: Single Day | 2: Two Days | Enter: Attendees | {recommendations_indicator}r: Recommendations | R: Refresh | a: Accept | t: Tentative | d: Decline/Delete | -: Toggle Declined | f: Focus | q: Quit"
+        help_line1 = f"↑/↓: Navigate | ←/→: Prev/Next Day | 1: Day | 2: Days | Enter: Details | {recommendations_indicator}r: Recommendations | R: Refresh | q: Quit"
+        help_line2 = "a: Accept | t: Tentative | d: Decline/Delete | f: Focus | -: Toggle Declined"
 
         # Status legend with declined toggle indicator
         declined_status = "👁️ Shown" if self.show_declined_locally else "🙈 Hidden"
@@ -1852,13 +1853,14 @@ class CalendarTUI:
             legend += " | 🐛 DEBUG MODE (stderr→debug.log)"
 
         try:
-            self.stdscr.addstr(height - 3, 0, "─" * width)
-            self.stdscr.addstr(height - 2, 2, legend[:width-4])
-            self.stdscr.addstr(height - 1, 2, help_text[:width-4])
+            self.stdscr.addstr(height - 4, 0, "─" * width)
+            self.stdscr.addstr(height - 3, 2, legend[:width-4])
+            self.stdscr.addstr(height - 2, 2, help_line1[:width-4])
+            self.stdscr.addstr(height - 1, 2, help_line2[:width-4])
 
             if self.status_message:
                 msg = self.status_message[:width-4]
-                self.stdscr.addstr(height - 4, 2, msg, curses.color_pair(3))
+                self.stdscr.addstr(height - 5, 2, msg, curses.color_pair(3))
         except curses.error:
             pass
 
@@ -1868,12 +1870,12 @@ class CalendarTUI:
 
         try:
             # Clear the status line
-            self.stdscr.addstr(height - 4, 0, " " * width)
+            self.stdscr.addstr(height - 5, 0, " " * width)
 
             # Draw the status message if there is one
             if self.status_message:
                 msg = self.status_message[:width-4]
-                self.stdscr.addstr(height - 4, 2, msg, curses.color_pair(3))
+                self.stdscr.addstr(height - 5, 2, msg, curses.color_pair(3))
 
             # Refresh only the status line area
             self.stdscr.refresh()
@@ -1990,6 +1992,141 @@ class CalendarTUI:
             self.debug_log(f"Delete exception: {e}")
             await self._reload_event_day(event_date)
 
+    async def _show_menu(self, title, options, initial=0):
+        """Show a vertical row-selector popup. Returns selected index or None on ESC."""
+        height, width = self.stdscr.getmaxyx()
+        hint = "↑/↓: Select  Enter: Confirm  ESC: Cancel"
+        menu_width = max(len(title) + 4, max(len(o) for o in options) + 8, len(hint) + 4)
+        menu_width = min(menu_width, width - 4)
+        menu_height = len(options) + 6  # top border + title-sep + options + sep + hint + bottom border
+        start_x = (width - menu_width) // 2
+        start_y = (height - menu_height) // 2
+        selected = initial
+
+        while True:
+            try:
+                for y in range(start_y, start_y + menu_height):
+                    self.stdscr.addstr(y, start_x, " " * menu_width, curses.color_pair(1))
+                self.stdscr.addstr(start_y, start_x,
+                                   "╔" + "═" * (menu_width - 2) + "╗",
+                                   curses.color_pair(1) | curses.A_BOLD)
+                title_x = start_x + (menu_width - len(title)) // 2
+                self.stdscr.addstr(start_y, title_x, title,
+                                   curses.color_pair(1) | curses.A_BOLD)
+                self.stdscr.addstr(start_y + 1, start_x,
+                                   "║" + "─" * (menu_width - 2) + "║",
+                                   curses.color_pair(1))
+                for i, option in enumerate(options):
+                    row_y = start_y + 2 + i
+                    self.stdscr.addstr(row_y, start_x, "║", curses.color_pair(1))
+                    self.stdscr.addstr(row_y, start_x + menu_width - 1, "║", curses.color_pair(1))
+                    prefix = " ▶ " if i == selected else "   "
+                    attr = curses.color_pair(3) | curses.A_BOLD if i == selected else curses.color_pair(1)
+                    line = (prefix + option).ljust(menu_width - 2)[:menu_width - 2]
+                    self.stdscr.addstr(row_y, start_x + 1, line, attr)
+                sep_y = start_y + 2 + len(options)
+                self.stdscr.addstr(sep_y, start_x,
+                                   "║" + "─" * (menu_width - 2) + "║",
+                                   curses.color_pair(1))
+                hint_y = sep_y + 1
+                self.stdscr.addstr(hint_y, start_x, "║", curses.color_pair(1))
+                self.stdscr.addstr(hint_y, start_x + menu_width - 1, "║", curses.color_pair(1))
+                hint_padded = hint.center(menu_width - 2)[:menu_width - 2]
+                self.stdscr.addstr(hint_y, start_x + 1, hint_padded, curses.color_pair(4))
+                self.stdscr.addstr(start_y + menu_height - 1, start_x,
+                                   "╚" + "═" * (menu_width - 2) + "╝",
+                                   curses.color_pair(1) | curses.A_BOLD)
+                self.stdscr.refresh()
+            except curses.error:
+                pass
+
+            await asyncio.sleep(0.05)
+            key = self.stdscr.getch()
+            if key == -1:
+                continue
+            elif key == 27:  # ESC
+                return None
+            elif key == curses.KEY_UP:
+                selected = (selected - 1) % len(options)
+            elif key == curses.KEY_DOWN:
+                selected = (selected + 1) % len(options)
+            elif key in (curses.KEY_ENTER, 10, 13):
+                return selected
+
+    async def change_working_location(self):
+        """Change the working location type for the selected working location event."""
+        filtered_events = self.get_filtered_events()
+        if not filtered_events or self.current_row >= len(filtered_events):
+            self.status_message = "No event selected"
+            return
+
+        event = filtered_events[self.current_row]
+        if event.event_type != 'workingLocation':
+            self.status_message = "❌ Select a working location event to change location"
+            return
+
+        options = [
+            "\U0001f3e0 Home",
+            "\U0001f3e2 Office",
+        ]
+        initial = 0 if event.working_location_type == 'homeOffice' else 1
+        choice = await self._show_menu("Change Location", options, initial=initial)
+        if choice is None:
+            self.status_message = "Location change cancelled"
+            self.draw()
+            return
+
+        label = ''
+        new_type = 'homeOffice' if choice == 0 else 'officeLocation'
+
+        # Capture event info before modifying
+        event_id = event.id
+        event_date = event.start_time.date() if event.start_time else None
+
+        # Optimistic update: change type in memory
+        event.working_location_type = new_type
+        self._clear_recommendations()
+        self.start_recommendations_fetch(show_popup=False)
+
+        type_display = '\U0001f3e0 Home' if new_type == 'homeOffice' else '\U0001f3e2 Office'
+        self.status_message = f"Changing location to {type_display}..."
+        self.draw()
+
+        asyncio.create_task(
+            self._change_location_background(event_id, new_type, event_date)
+        )
+
+    async def _change_location_background(self, event_id, new_type, event_date):
+        """Background task: change working location via the set_working_location MCP tool."""
+        try:
+            self.debug_log(f"Background: Changing working location {event_id} to {new_type}")
+            result = await self.mcp_client.call_tool("set_working_location", {
+                "action": "change",
+                "event_id": event_id,
+                "location_type": new_type,
+            })
+
+            if isinstance(result, str) and ("Error:" in result or "error" in result.lower()):
+                self.debug_log(f"Background: set_working_location failed: {result}")
+                self.status_message = "❌ Location change failed, reloading"
+                await self._reload_current_period()
+                self._find_current_event()
+                self.draw()
+                return
+
+            type_display = '\U0001f3e0 Home' if new_type == 'homeOffice' else '\U0001f3e2 Office'
+            self.status_message = f"✅ Location changed to {type_display}"
+            await self._reload_current_period()
+            self._find_current_event()
+            self.draw()
+
+        except Exception as e:
+            self.debug_log(f"Background: Change location exception: {e}")
+            self.status_message = "❌ Location change failed, reloading"
+            await self._reload_current_period()
+            self._find_current_event()
+            self.draw()
+
     async def _reload_current_period(self, start_date: datetime = None, end_date: datetime = None):
         """Reload the current period's data
 
@@ -2043,6 +2180,7 @@ class CalendarTUI:
 
             self.debug_log(f"Reloading events for {event_date}")
             await self._fetch_week_range(start_of_day, end_of_day, replace=True)
+            self._find_current_event()
             self.draw()
         except Exception as e:
             self.debug_log(f"Error reloading event day {event_date}: {e}")
@@ -2330,11 +2468,12 @@ class CalendarTUI:
             events_list = data.get('events', [])
             new_events = [CalendarEvent(e, core_start_hour=self.core_start_hour, core_end_hour=self.core_end_hour) for e in events_list]
 
-            # Filter out all-day events that started before today
+            # Filter out all-day events that started before today,
+            # but keep working location events (they should always show on their date)
             today = datetime.now().date()
             filtered_new_events = []
             for event in new_events:
-                if event.is_all_day and event.start_time:
+                if event.is_all_day and event.event_type != 'workingLocation' and event.start_time:
                     event_date = event.start_time.date()
                     if event_date < today:
                         continue
@@ -2479,6 +2618,40 @@ class CalendarTUI:
             self.debug_log(f"Error fetching more data: {e}")
             self.status_message = f"❌ Error loading data: {str(e)}"
 
+    def _seconds_until_next_quarter(self) -> float:
+        """Return seconds until the next :00, :15, :30, or :45 boundary."""
+        now = datetime.now()
+        next_quarter_minute = ((now.minute // 15) + 1) * 15
+        if next_quarter_minute >= 60:
+            next_tick = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        else:
+            next_tick = now.replace(minute=next_quarter_minute, second=0, microsecond=0)
+        return (next_tick - now).total_seconds()
+
+    async def _auto_refresh_loop(self):
+        """Background task: silently reload the current period at each quarter-hour boundary."""
+        try:
+            while True:
+                wait = self._seconds_until_next_quarter()
+                self.debug_log(f"Auto-refresh: sleeping {wait:.1f}s until next quarter-hour")
+                await asyncio.sleep(wait)
+
+                # Only auto-refresh when viewing today (no point refreshing past/future days)
+                today = datetime.now().date()
+                if self.current_view_date.date() != today:
+                    self.debug_log("Auto-refresh: skipping (not viewing today)")
+                    continue
+
+                self.debug_log("Auto-refresh: reloading current period")
+                await self._reload_current_period()
+                self._find_current_event()
+                self.draw()
+                self.debug_log("Auto-refresh: done")
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            self.debug_log(f"Auto-refresh error: {e}")
+
     async def _background_fetch_full_range(self):
         """Background task to incrementally fetch full 3-week range"""
         try:
@@ -2593,6 +2766,9 @@ class CalendarTUI:
         # Start background fetch for full 3 weeks
         self.background_fetch_task = asyncio.create_task(self._background_fetch_full_range())
 
+        # Start quarter-hour auto-refresh (keeps current-time cursor position up to date)
+        asyncio.create_task(self._auto_refresh_loop())
+
         # Start background recommendations fetch (silently, without showing popup)
         self.start_recommendations_fetch(show_popup=False)
 
@@ -2670,8 +2846,9 @@ class CalendarTUI:
                     filtered_events = self.get_filtered_events()
                     if filtered_events and self.current_row < len(filtered_events):
                         event = filtered_events[self.current_row]
-                        # Show event details for any non-available event
-                        if not event.is_available:
+                        if event.event_type == 'workingLocation':
+                            await self.change_working_location()
+                        elif not event.is_available:
                             self.show_attendee_details = True
                             self.attendee_details_event = event
                         else:

@@ -804,6 +804,103 @@ func (c *Client) GetCalendarColors() (*calendar.Colors, error) {
 	return c.service.Colors.Get().Do()
 }
 
+// SetWorkingLocationParams represents parameters for creating or changing a working location event.
+type SetWorkingLocationParams struct {
+	CalendarID   string `json:"calendar_id"`
+	Action       string `json:"action"`        // "create", "change", or "remove"
+	EventID      string `json:"event_id"`      // required for "change" and "remove"
+	Date         string `json:"date"`          // YYYY-MM-DD, required for "create"
+	LocationType string `json:"location_type"` // "homeOffice" or "officeLocation"
+}
+
+// SetWorkingLocation creates, changes, or removes a working location event.
+// For "change", a single PATCH call updates the working location type in-place,
+// using NullFields to explicitly clear the old type's nested object.
+func (c *Client) SetWorkingLocation(params SetWorkingLocationParams) error {
+	if params.CalendarID == "" {
+		params.CalendarID = "primary"
+	}
+
+	switch params.Action {
+	case "remove":
+		return c.service.Events.Delete(params.CalendarID, params.EventID).Do()
+
+	case "change":
+		// The Google Calendar API rejects PATCH on working location events
+		// (malformedWorkingLocationEvent), so we delete and recreate instead.
+
+		// Extract date from the event: either a provided date or the _YYYYMMDD suffix
+		// on recurring instance IDs (e.g. "abc123_20260310" → "2026-03-10").
+		date := params.Date
+		if date == "" {
+			// Try to get the event to find its date
+			existing, err := c.service.Events.Get(params.CalendarID, params.EventID).Do()
+			if err != nil {
+				return fmt.Errorf("failed to get event to determine date: %v", err)
+			}
+			if existing.Start != nil && existing.Start.Date != "" {
+				date = existing.Start.Date
+			} else {
+				return fmt.Errorf("could not determine date for working location event")
+			}
+		}
+
+		// Delete the existing event
+		if err := c.service.Events.Delete(params.CalendarID, params.EventID).Do(); err != nil {
+			return fmt.Errorf("failed to delete existing working location: %v", err)
+		}
+
+		// Recreate with the new type
+		summary := "Home"
+		if params.LocationType == "officeLocation" {
+			summary = "Office"
+		}
+		return c.createWorkingLocationEvent(params.CalendarID, summary, date, params.LocationType)
+
+	case "create":
+		summary := "Home"
+		if params.LocationType == "officeLocation" {
+			summary = "Office"
+		}
+		return c.createWorkingLocationEvent(params.CalendarID, summary, params.Date, params.LocationType)
+
+	default:
+		return fmt.Errorf("unknown action %q: must be 'create', 'change', or 'remove'", params.Action)
+	}
+}
+
+// createWorkingLocationEvent inserts a new all-day working location event for the given date.
+func (c *Client) createWorkingLocationEvent(calendarID, summary, date, locationType string) error {
+	// Google Calendar all-day event end date is exclusive (next day)
+	endDate, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return fmt.Errorf("invalid date %q: %v", date, err)
+	}
+	endDateStr := endDate.AddDate(0, 0, 1).Format("2006-01-02")
+
+	event := &calendar.Event{
+		Summary:      summary,
+		EventType:    "workingLocation",
+		Transparency: "transparent",
+		Visibility:   "public",
+		Start:        &calendar.EventDateTime{Date: date},
+		End:          &calendar.EventDateTime{Date: endDateStr},
+		WorkingLocationProperties: &calendar.EventWorkingLocationProperties{
+			Type: locationType,
+		},
+	}
+
+	switch locationType {
+	case "homeOffice":
+		event.WorkingLocationProperties.HomeOffice = struct{}{}
+	case "officeLocation":
+		event.WorkingLocationProperties.OfficeLocation = &calendar.EventWorkingLocationPropertiesOfficeLocation{}
+	}
+
+	_, err = c.service.Events.Insert(calendarID, event).Do()
+	return err
+}
+
 // DetectOverlaps analyzes events for time overlaps and returns a map of event IDs to overlap status
 func (c *Client) DetectOverlaps(events []*calendar.Event, showDeclined bool) map[string]bool {
 	t0 := time.Now()
