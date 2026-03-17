@@ -744,6 +744,30 @@ class CalendarTUI:
         elif self.current_row < self.scroll_offset:
             self.scroll_offset = self.current_row
 
+    def _restore_cursor(self, saved_row: int, saved_event_id: str = None):
+        """Restore cursor position after a reload.
+
+        Tries to keep the same event selected by ID; falls back to the same
+        row index (clamped to the new list length) so the cursor never jumps
+        to the current-time position unexpectedly.
+        """
+        filtered_events = self.get_filtered_events()
+        if not filtered_events:
+            self.current_row = 0
+            return
+
+        if saved_event_id:
+            # Try to find the same event by ID
+            for i, e in enumerate(filtered_events):
+                if e.id == saved_event_id:
+                    self.current_row = i
+                    self._adjust_scroll_for_current_row()
+                    return
+
+        # Event not found (e.g. declined and hidden) — keep same index, clamped
+        self.current_row = min(saved_row, len(filtered_events) - 1)
+        self._adjust_scroll_for_current_row()
+
     def _insert_available_slots(self):
         """Insert available time slots for gaps of 30min or more during core hours"""
         # Filter out all-day events, available slots, and sort by start time
@@ -2098,6 +2122,13 @@ class CalendarTUI:
 
     async def _change_location_background(self, event_id, new_type, event_date):
         """Background task: change working location via the set_working_location MCP tool."""
+        # Save cursor position before any reload so it doesn't jump
+        saved_row = self.current_row
+        saved_sel_id = None
+        filtered_before = self.get_filtered_events()
+        if filtered_before and self.current_row < len(filtered_before):
+            saved_sel_id = filtered_before[self.current_row].id
+
         try:
             self.debug_log(f"Background: Changing working location {event_id} to {new_type}")
             result = await self.mcp_client.call_tool("set_working_location", {
@@ -2110,21 +2141,21 @@ class CalendarTUI:
                 self.debug_log(f"Background: set_working_location failed: {result}")
                 self.status_message = "❌ Location change failed, reloading"
                 await self._reload_current_period()
-                self._find_current_event()
+                self._restore_cursor(saved_row, saved_sel_id)
                 self.draw()
                 return
 
             type_display = '\U0001f3e0 Home' if new_type == 'homeOffice' else '\U0001f3e2 Office'
             self.status_message = f"✅ Location changed to {type_display}"
             await self._reload_current_period()
-            self._find_current_event()
+            self._restore_cursor(saved_row, saved_sel_id)
             self.draw()
 
         except Exception as e:
             self.debug_log(f"Background: Change location exception: {e}")
             self.status_message = "❌ Location change failed, reloading"
             await self._reload_current_period()
-            self._find_current_event()
+            self._restore_cursor(saved_row, saved_sel_id)
             self.draw()
 
     async def _reload_current_period(self, start_date: datetime = None, end_date: datetime = None):
@@ -2171,6 +2202,13 @@ class CalendarTUI:
             await self._reload_current_period()
             return
 
+        # Save cursor position before the reload so it doesn't jump
+        saved_row = self.current_row
+        saved_event_id = None
+        filtered_before = self.get_filtered_events()
+        if filtered_before and self.current_row < len(filtered_before):
+            saved_event_id = filtered_before[self.current_row].id
+
         try:
             # Convert date to datetime for the API call
             from datetime import datetime
@@ -2180,7 +2218,7 @@ class CalendarTUI:
 
             self.debug_log(f"Reloading events for {event_date}")
             await self._fetch_week_range(start_of_day, end_of_day, replace=True)
-            self._find_current_event()
+            self._restore_cursor(saved_row, saved_event_id)
             self.draw()
         except Exception as e:
             self.debug_log(f"Error reloading event day {event_date}: {e}")
