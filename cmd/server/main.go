@@ -33,8 +33,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Setup Google Drive service
+	driveService, err := auth.GetDriveService()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Unable to retrieve Drive client: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Create calendar client and tools
-	calendarClient := calendar.NewClient(calendarService)
+	calendarClient := calendar.NewClient(calendarService, driveService)
 	calendarTools := calendar.NewCalendarTools(calendarClient)
 
 	// Create MCP server
@@ -47,7 +54,7 @@ func main() {
 
 	// Log server startup to stderr
 	server.LogToStderr("Google Calendar MCP Server starting...")
-	server.LogToStderr("Available tools: create_event, edit_event, delete_event, search_attendees, get_attendee_freebusy, list_events")
+	server.LogToStderr("Available tools: create_event, edit_event, delete_event, search_attendees, get_attendee_freebusy, list_events, get_document")
 
 	// Run the server
 	if err := server.Run(); err != nil {

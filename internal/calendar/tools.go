@@ -432,6 +432,35 @@ func (ct *CalendarTools) GetTools() []mcp.Tool {
 			},
 		},
 		{
+			Name:        "list_event_occurrences",
+			Description: "List past and upcoming occurrences of a recurring calendar event series. Provide the recurring event ID (or any instance ID) to retrieve the full event detail set for each occurrence, including attachments such as meeting notes.",
+			InputSchema: mcp.ToolSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"event_id": map[string]interface{}{
+						"type":        "string",
+						"description": "The recurring event series ID, or any instance ID from the series (the instance suffix will be stripped automatically) (REQUIRED)",
+					},
+					"calendar_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Calendar ID (defaults to 'primary')",
+						"default":     "primary",
+					},
+					"past_count": map[string]interface{}{
+						"type":        "integer",
+						"description": "Number of past occurrences to return (defaults to 5)",
+						"default":     5,
+					},
+					"future_count": map[string]interface{}{
+						"type":        "integer",
+						"description": "Number of upcoming occurrences to return (defaults to 3)",
+						"default":     3,
+					},
+				},
+				Required: []string{"event_id"},
+			},
+		},
+		{
 			Name:        "list_events",
 			Description: "List calendar events with comprehensive filtering options. Supports predefined time filters (today, this_week, next_week) and custom time ranges.",
 			InputSchema: mcp.ToolSchema{
@@ -493,8 +522,44 @@ func (ct *CalendarTools) GetTools() []mcp.Tool {
 						"enum":        []string{"text", "json"},
 						"default":     "text",
 					},
+					"query": map[string]interface{}{
+						"type":        "string",
+						"description": "Free-text search query to filter events by title, description, location, or attendees (optional)",
+					},
 				},
 				Required: []string{},
+			},
+		},
+		{
+			Name:        "get_document",
+			Description: "Retrieve a Google Doc as Markdown text. Accepts a raw file ID or a full Google Docs/Drive URL (e.g. from a calendar event attachment).",
+			InputSchema: mcp.ToolSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"file_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Google Drive file ID or full Google Docs URL",
+					},
+				},
+				Required: []string{"file_id"},
+			},
+		},
+		{
+			Name:        "get_meeting_context",
+			Description: "For a recurring event, retrieves the Gemini notes from the most recent past occurrence and the event ID of the next upcoming occurrence. Use the returned next_occurrence_id with edit_event to insert a recap into the next meeting's description (patching an instance ID only affects that one occurrence, not the series).",
+			InputSchema: mcp.ToolSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"event_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Event ID of any occurrence or the recurring series ID",
+					},
+					"calendar_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Calendar ID (defaults to 'primary')",
+					},
+				},
+				Required: []string{"event_id"},
 			},
 		},
 	}
@@ -517,8 +582,14 @@ func (ct *CalendarTools) HandleTool(name string, arguments map[string]interface{
 		return ct.handleSearchAttendees(arguments)
 	case "get_attendee_freebusy":
 		return ct.handleGetAttendeeFreeBusy(arguments)
+	case "list_event_occurrences":
+		return ct.handleListEventOccurrences(arguments)
 	case "list_events":
 		return ct.handleListEvents(arguments)
+	case "get_document":
+		return ct.handleGetDocument(arguments)
+	case "get_meeting_context":
+		return ct.handleGetMeetingContext(arguments)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
@@ -1132,6 +1203,60 @@ func getIntOrDefault(args map[string]interface{}, key string, defaultValue int) 
 	return defaultValue
 }
 
+func (ct *CalendarTools) handleListEventOccurrences(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
+	eventID, ok := arguments["event_id"].(string)
+	if !ok || eventID == "" {
+		return nil, fmt.Errorf("event_id is required")
+	}
+
+	params := GetRecurringOccurrencesParams{
+		CalendarID:  getStringOrDefault(arguments, "calendar_id", "primary"),
+		EventID:     eventID,
+		PastCount:   getIntOrDefault(arguments, "past_count", 5),
+		FutureCount: getIntOrDefault(arguments, "future_count", 3),
+	}
+
+	past, upcoming, err := ct.client.GetRecurringOccurrences(params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get recurring occurrences: %v", err)
+	}
+
+	result := ct.formatRecurringOccurrences(past, upcoming)
+
+	return &mcp.CallToolResult{
+		Content: []mcp.ToolResult{{
+			Type: "text",
+			Text: result,
+		}},
+	}, nil
+}
+
+func (ct *CalendarTools) formatRecurringOccurrences(past, upcoming []*calendar.Event) string {
+	type occurrenceResult struct {
+		Past     []json.RawMessage `json:"past"`
+		Upcoming []json.RawMessage `json:"upcoming"`
+	}
+
+	toRaw := func(events []*calendar.Event) []json.RawMessage {
+		out := make([]json.RawMessage, 0, len(events))
+		for _, e := range events {
+			b, err := json.Marshal(e)
+			if err == nil {
+				out = append(out, json.RawMessage(b))
+			}
+		}
+		return out
+	}
+
+	result := occurrenceResult{
+		Past:     toRaw(past),
+		Upcoming: toRaw(upcoming),
+	}
+
+	b, _ := json.MarshalIndent(result, "", "  ")
+	return string(b)
+}
+
 func (ct *CalendarTools) handleListEvents(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
 	params := ListEventsParams{
 		CalendarID:     getStringOrDefault(arguments, "calendar_id", "primary"),
@@ -1143,6 +1268,7 @@ func (ct *CalendarTools) handleListEvents(arguments map[string]interface{}) (*mc
 		OrderBy:        getStringOrDefault(arguments, "order_by", "startTime"),
 		ShowDeclined:   getBoolOrDefault(arguments, "show_declined", false),
 		DetectOverlaps: getBoolOrDefault(arguments, "detect_overlaps", true),
+		Query:          getStringOrDefault(arguments, "query", ""),
 	}
 
 	outputFormat := getStringOrDefault(arguments, "output_format", "text")
@@ -1300,6 +1426,25 @@ func (ct *CalendarTools) formatEventsJSON(events *calendar.Events, params ListEv
 		// Hangout/Meet link
 		if event.HangoutLink != "" {
 			eventJSON["hangoutLink"] = event.HangoutLink
+		}
+
+		// Recurring event ID (identifies which series this instance belongs to)
+		if event.RecurringEventId != "" {
+			eventJSON["recurringEventId"] = event.RecurringEventId
+		}
+
+		// Attachments (e.g. Gemini Notes links)
+		if len(event.Attachments) > 0 {
+			attachmentsJSON := make([]map[string]interface{}, 0, len(event.Attachments))
+			for _, att := range event.Attachments {
+				attachmentsJSON = append(attachmentsJSON, map[string]interface{}{
+					"title":    att.Title,
+					"fileUrl":  att.FileUrl,
+					"mimeType": att.MimeType,
+					"fileId":   att.FileId,
+				})
+			}
+			eventJSON["attachments"] = attachmentsJSON
 		}
 
 		// Focus time properties
@@ -1517,6 +1662,17 @@ func (ct *CalendarTools) formatSingleEvent(result *strings.Builder, event *calen
 		}
 	}
 
+	// Attachments (e.g. Gemini Notes)
+	if len(event.Attachments) > 0 {
+		for _, att := range event.Attachments {
+			title := att.Title
+			if title == "" {
+				title = "Attachment"
+			}
+			result.WriteString(fmt.Sprintf("📎 **%s:** %s\n", title, att.FileUrl))
+		}
+	}
+
 	// Event type information from extended properties
 	if event.ExtendedProperties != nil && event.ExtendedProperties.Private != nil {
 		if eventType, exists := event.ExtendedProperties.Private["eventType"]; exists && eventType != "" {
@@ -1588,4 +1744,42 @@ func (ct *CalendarTools) formatSingleEvent(result *strings.Builder, event *calen
 	result.WriteString(fmt.Sprintf("%s **Has Overlap:** %t\n", overlapIcon, hasOverlap))
 
 	result.WriteString("\n")
+}
+
+func (ct *CalendarTools) handleGetDocument(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
+	fileID, _ := arguments["file_id"].(string)
+	if fileID == "" {
+		return nil, fmt.Errorf("file_id is required")
+	}
+	content, err := ct.client.GetDocument(GetDocumentParams{FileID: fileID})
+	if err != nil {
+		return nil, err
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.ToolResult{{Type: "text", Text: content}},
+	}, nil
+}
+
+func (ct *CalendarTools) handleGetMeetingContext(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
+	eventID, _ := arguments["event_id"].(string)
+	if eventID == "" {
+		return nil, fmt.Errorf("event_id is required")
+	}
+	calendarID := getStringOrDefault(arguments, "calendar_id", "primary")
+
+	result, err := ct.client.GetMeetingContext(GetMeetingContextParams{
+		CalendarID: calendarID,
+		EventID:    eventID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := json.Marshal(result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal result: %v", err)
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.ToolResult{{Type: "text", Text: string(data)}},
+	}, nil
 }

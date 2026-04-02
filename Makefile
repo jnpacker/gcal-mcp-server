@@ -1,7 +1,11 @@
-.PHONY: build clean test install
+.PHONY: build clean test install auth
 
 BINARY_NAME=gcal-mcp-server
 BUILD_DIR=./bin
+
+auth:
+	rm -f token.json
+	go run cmd/server/main.go
 
 build:
 	@mkdir -p $(BUILD_DIR)

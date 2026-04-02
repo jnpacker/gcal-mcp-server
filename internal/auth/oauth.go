@@ -31,6 +31,7 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/calendar/v3"
+	"google.golang.org/api/drive/v3"
 )
 
 // AuthError represents an authentication error that may require user action
@@ -124,9 +125,8 @@ func getCredentialPaths() (string, string, error) {
 	return credPath, tokenPath, nil
 }
 
-// GetCalendarService creates and returns a new Google Calendar API service client.
-// It handles OAuth authentication and token management automatically.
-func GetCalendarService() (*calendar.Service, error) {
+// getGoogleHTTPClient returns an authenticated HTTP client with Calendar and Drive scopes.
+func getGoogleHTTPClient() (*http.Client, error) {
 	credPath, tokenPath, err := getCredentialPaths()
 	if err != nil {
 		return nil, fmt.Errorf("unable to determine credential paths: %v", err)
@@ -137,12 +137,18 @@ func GetCalendarService() (*calendar.Service, error) {
 		return nil, fmt.Errorf("unable to read client secret file from %s: %v", credPath, err)
 	}
 
-	config, err := google.ConfigFromJSON(b, calendar.CalendarScope)
+	config, err := google.ConfigFromJSON(b, calendar.CalendarScope, drive.DriveReadonlyScope)
 	if err != nil {
 		return nil, fmt.Errorf("unable to parse client secret file to config: %v", err)
 	}
 
-	client, err := getClient(config, tokenPath)
+	return getClient(config, tokenPath)
+}
+
+// GetCalendarService creates and returns a new Google Calendar API service client.
+// It handles OAuth authentication and token management automatically.
+func GetCalendarService() (*calendar.Service, error) {
+	client, err := getGoogleHTTPClient()
 	if err != nil {
 		return nil, err
 	}
@@ -150,6 +156,21 @@ func GetCalendarService() (*calendar.Service, error) {
 	srv, err := calendar.New(client)
 	if err != nil {
 		return nil, fmt.Errorf("unable to retrieve Calendar client: %v", err)
+	}
+
+	return srv, nil
+}
+
+// GetDriveService creates and returns a new Google Drive API service client.
+func GetDriveService() (*drive.Service, error) {
+	client, err := getGoogleHTTPClient()
+	if err != nil {
+		return nil, err
+	}
+
+	srv, err := drive.New(client)
+	if err != nil {
+		return nil, fmt.Errorf("unable to retrieve Drive client: %v", err)
 	}
 
 	return srv, nil
