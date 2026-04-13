@@ -18,23 +18,28 @@ package calendar
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"google.golang.org/api/calendar/v3"
+	"google.golang.org/api/drive/v3"
 	"google.golang.org/api/googleapi"
 )
 
 type Client struct {
-	service        *calendar.Service
+	service         *calendar.Service
+	driveService    *drive.Service
 	cachedUserEmail string // cached to avoid repeated API calls
 }
 
-// NewClient creates a new Calendar API client with the given Google Calendar service.
-func NewClient(service *calendar.Service) *Client {
+// NewClient creates a new Calendar API client with the given Google Calendar and Drive services.
+func NewClient(service *calendar.Service, driveService *drive.Service) *Client {
 	return &Client{
-		service: service,
+		service:      service,
+		driveService: driveService,
 	}
 }
 
@@ -158,6 +163,7 @@ type ListEventsParams struct {
 	OrderBy         string    `json:"order_by,omitempty"`
 	ShowDeclined    bool      `json:"show_declined,omitempty"`    // Include declined events in overlap detection
 	DetectOverlaps  bool      `json:"detect_overlaps,omitempty"`  // Enable overlap detection
+	Query           string    `json:"query,omitempty"`            // Free-text search query
 }
 
 // EventWithOverlap wraps a calendar.Event with overlap detection information
@@ -603,8 +609,89 @@ func (c *Client) GetEvent(calendarID, eventID string) (*calendar.Event, error) {
 
 	// Get event with complete attendee information including response status and color
 	getCall := c.service.Events.Get(calendarID, eventID).
-		Fields(googleapi.Field("id,summary,description,location,start,end,attendees(email,displayName,responseStatus),conferenceData,creator,organizer,colorId"))
+		Fields(googleapi.Field(eventDetailFields))
 	return getCall.Do()
+}
+
+// eventDetailFields is the shared field selector used by GetEvent and GetRecurringOccurrences
+// to return a consistent, complete event detail set.
+const eventDetailFields = "id,summary,description,location,start,end,attendees(email,displayName,responseStatus),conferenceData,creator,organizer,colorId,attachments,recurringEventId,status"
+
+// GetRecurringOccurrencesParams holds parameters for listing instances of a recurring event.
+type GetRecurringOccurrencesParams struct {
+	CalendarID  string
+	EventID     string // base recurring event ID, or an instance ID (suffix will be stripped)
+	PastCount   int    // number of past occurrences to return (default 5)
+	FutureCount int    // number of upcoming occurrences to return (default 3)
+}
+
+// stripRecurringInstanceSuffix removes the _YYYYMMDD or _YYYYMMDDTHHMMSSZ suffix
+// from a recurring event instance ID to get the base series ID.
+var recurringInstanceSuffixRe = regexp.MustCompile(`_\d{8}(T\d{6}Z)?$`)
+
+func stripRecurringInstanceSuffix(id string) string {
+	return recurringInstanceSuffixRe.ReplaceAllString(id, "")
+}
+
+// GetRecurringOccurrences returns past and upcoming instances of a recurring event series.
+// It returns (past, upcoming, error). Past is ordered oldest-first; upcoming is ordered
+// soonest-first.
+func (c *Client) GetRecurringOccurrences(params GetRecurringOccurrencesParams) ([]*calendar.Event, []*calendar.Event, error) {
+	if params.CalendarID == "" {
+		params.CalendarID = "primary"
+	}
+	if params.PastCount == 0 {
+		params.PastCount = 5
+	}
+	if params.FutureCount == 0 {
+		params.FutureCount = 3
+	}
+
+	baseID := stripRecurringInstanceSuffix(params.EventID)
+	now := time.Now()
+	fields := googleapi.Field("items("+eventDetailFields+"),nextPageToken")
+
+	// --- Past occurrences ---
+	// Look back up to 2 years; paginate to collect all instances in that window
+	// then take the most recent PastCount.
+	pastTimeMin := now.AddDate(-2, 0, 0)
+	var allPast []*calendar.Event
+	pastCall := c.service.Events.Instances(params.CalendarID, baseID).
+		TimeMin(pastTimeMin.Format(time.RFC3339)).
+		TimeMax(now.Format(time.RFC3339)).
+		MaxResults(250).
+		Fields(fields)
+	for {
+		page, err := pastCall.Do()
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to get past occurrences: %v", err)
+		}
+		allPast = append(allPast, page.Items...)
+		if page.NextPageToken == "" {
+			break
+		}
+		pastCall = pastCall.PageToken(page.NextPageToken)
+	}
+	// Take the most recent PastCount (list is in ascending startTime order)
+	if len(allPast) > params.PastCount {
+		allPast = allPast[len(allPast)-params.PastCount:]
+	}
+
+	// --- Upcoming occurrences ---
+	upcomingCall := c.service.Events.Instances(params.CalendarID, baseID).
+		TimeMin(now.Format(time.RFC3339)).
+		MaxResults(int64(params.FutureCount)).
+		Fields(fields)
+	upcomingPage, err := upcomingCall.Do()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get upcoming occurrences: %v", err)
+	}
+	upcoming := upcomingPage.Items
+	if len(upcoming) > params.FutureCount {
+		upcoming = upcoming[:params.FutureCount]
+	}
+
+	return allPast, upcoming, nil
 }
 
 // SearchAttendees performs a simplified attendee search based on email validation.
@@ -694,6 +781,10 @@ func (c *Client) ListEvents(params ListEventsParams) (*calendar.Events, error) {
 		call = call.OrderBy(params.OrderBy)
 	} else {
 		call = call.OrderBy("startTime") // Default ordering
+	}
+
+	if params.Query != "" {
+		call = call.Q(params.Query)
 	}
 
 	events, err := call.Do()
@@ -1037,4 +1128,104 @@ func parseEventTimes(event *calendar.Event) (time.Time, time.Time, bool, error) 
 func eventsOverlap(start1, end1, start2, end2 time.Time) bool {
 	// Events overlap if one starts before the other ends and vice versa
 	return start1.Before(end2) && start2.Before(end1)
+}
+
+// GetDocumentParams represents parameters for retrieving a Google Drive document.
+type GetDocumentParams struct {
+	FileID string // raw file ID or a Google Docs/Drive URL
+}
+
+// parseFileID extracts a Drive file ID from a Google Docs/Drive URL, or returns the
+// input unchanged if it looks like a raw file ID already.
+func parseFileID(input string) string {
+	re := regexp.MustCompile(`/d/([a-zA-Z0-9_-]+)`)
+	if m := re.FindStringSubmatch(input); len(m) > 1 {
+		return m[1]
+	}
+	return input
+}
+
+type GetMeetingContextParams struct {
+	CalendarID string // defaults to "primary"
+	EventID    string // instance or recurring event ID
+}
+
+type MeetingContextResult struct {
+	PreviousOccurrenceID   string `json:"previous_occurrence_id"`
+	PreviousOccurrenceTime string `json:"previous_occurrence_time"`
+	PreviousNotesContent   string `json:"previous_notes_content"`
+	NextOccurrenceID       string `json:"next_occurrence_id"`
+	NextOccurrenceTime     string `json:"next_occurrence_time"`
+}
+
+// GetMeetingContext finds the most recent past occurrence with Gemini notes and the next
+// upcoming occurrence for a recurring event. It returns the notes content and the next
+// occurrence's event ID so a recap can be inserted into that instance's description.
+func (c *Client) GetMeetingContext(params GetMeetingContextParams) (*MeetingContextResult, error) {
+	if params.CalendarID == "" {
+		params.CalendarID = "primary"
+	}
+	past, upcoming, err := c.GetRecurringOccurrences(GetRecurringOccurrencesParams{
+		CalendarID:  params.CalendarID,
+		EventID:     params.EventID,
+		PastCount:   10,
+		FutureCount: 1,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Find the most recent past occurrence with a Gemini Notes attachment (search newest-first)
+	var prevEvent *calendar.Event
+	var geminiFileID string
+	for i := len(past) - 1; i >= 0; i-- {
+		for _, att := range past[i].Attachments {
+			if att.MimeType == "application/vnd.google-apps.document" &&
+				strings.Contains(strings.ToLower(att.Title), "gemini") {
+				prevEvent = past[i]
+				geminiFileID = att.FileId
+				break
+			}
+		}
+		if prevEvent != nil {
+			break
+		}
+	}
+	if prevEvent == nil {
+		return nil, fmt.Errorf("no past occurrence with Gemini notes found")
+	}
+
+	notes, err := c.GetDocument(GetDocumentParams{FileID: geminiFileID})
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch Gemini notes: %v", err)
+	}
+
+	result := &MeetingContextResult{
+		PreviousOccurrenceID:   prevEvent.Id,
+		PreviousOccurrenceTime: prevEvent.Start.DateTime,
+		PreviousNotesContent:   notes,
+	}
+	if len(upcoming) > 0 {
+		result.NextOccurrenceID = upcoming[0].Id
+		result.NextOccurrenceTime = upcoming[0].Start.DateTime
+	}
+	return result, nil
+}
+
+// GetDocument exports a Google Doc as Markdown text using the Drive API.
+func (c *Client) GetDocument(params GetDocumentParams) (string, error) {
+	if params.FileID == "" {
+		return "", fmt.Errorf("file_id is required")
+	}
+	fileID := parseFileID(params.FileID)
+	resp, err := c.driveService.Files.Export(fileID, "text/markdown").Download()
+	if err != nil {
+		return "", fmt.Errorf("failed to export document: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read document body: %v", err)
+	}
+	return string(body), nil
 }
