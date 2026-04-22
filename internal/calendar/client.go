@@ -105,7 +105,7 @@ type PatchEventParams struct {
 
 	// Track which fields have been explicitly provided
 	HasAttendees  bool `json:"-"`
-	HasRecurrence bool `json:"-"}`
+	HasRecurrence bool `json:"-"`
 }
 
 type AttendeeParams struct {

@@ -32,6 +32,7 @@ import (
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/calendar/v3"
 	"google.golang.org/api/drive/v3"
+	"google.golang.org/api/option"
 )
 
 // AuthError represents an authentication error that may require user action
@@ -153,7 +154,7 @@ func GetCalendarService() (*calendar.Service, error) {
 		return nil, err
 	}
 
-	srv, err := calendar.New(client)
+	srv, err := calendar.NewService(context.Background(), option.WithHTTPClient(client))
 	if err != nil {
 		return nil, fmt.Errorf("unable to retrieve Calendar client: %v", err)
 	}
@@ -168,7 +169,7 @@ func GetDriveService() (*drive.Service, error) {
 		return nil, err
 	}
 
-	srv, err := drive.New(client)
+	srv, err := drive.NewService(context.Background(), option.WithHTTPClient(client))
 	if err != nil {
 		return nil, fmt.Errorf("unable to retrieve Drive client: %v", err)
 	}
@@ -309,7 +310,9 @@ func getTokenFromWeb(config *oauth2.Config) (*oauth2.Token, error) {
 		// Shutdown the server before returning
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		server.Shutdown(ctx)
+		if shutdownErr := server.Shutdown(ctx); shutdownErr != nil {
+			fmt.Fprintf(os.Stderr, "server shutdown error: %v\n", shutdownErr)
+		}
 		return nil, &AuthError{
 			Message:   fmt.Sprintf("OAuth error: %v", err),
 			AuthURL:   authURL,
@@ -319,7 +322,9 @@ func getTokenFromWeb(config *oauth2.Config) (*oauth2.Token, error) {
 		// Shutdown the server before returning
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		server.Shutdown(ctx)
+		if shutdownErr := server.Shutdown(ctx); shutdownErr != nil {
+			fmt.Fprintf(os.Stderr, "server shutdown error: %v\n", shutdownErr)
+		}
 		return nil, &AuthError{
 			Message:   "Timeout waiting for authorization (5 minutes)",
 			AuthURL:   authURL,
@@ -330,7 +335,9 @@ func getTokenFromWeb(config *oauth2.Config) (*oauth2.Token, error) {
 	// Shutdown the temporary server
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	server.Shutdown(ctx)
+	if err := server.Shutdown(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "server shutdown error: %v\n", err)
+	}
 
 	// Exchange the code for a token
 	tok, err := config.Exchange(context.TODO(), authCode)
