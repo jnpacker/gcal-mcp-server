@@ -223,7 +223,9 @@ func (s *Server) sendError(id interface{}, code int, message string, data interf
 			Data:    data,
 		},
 	}
-	s.sendResponse(response)
+	if err := s.sendResponse(response); err != nil {
+		s.LogToStderr("failed to send error response: %v", err)
+	}
 }
 
 func boolPtr(b bool) *bool {
