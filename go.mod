@@ -1,6 +1,6 @@
 module gcal-mcp-server
 
-go 1.25.0
+go 1.26.3
 
 toolchain go1.26.3
 
