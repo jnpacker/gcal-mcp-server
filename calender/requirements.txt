@@ -1,2 +1,2 @@
-mcp==1.27.1
+mcp==1.27.1  # TODO(CVE-2025-45768): pyjwt transitive dep has disputed "weak encryption" advisory (PYSEC-2025-183); no fixed version exists upstream; supplier contests the finding
 python-multipart>=0.0.29
