@@ -42,17 +42,3 @@ The repository uses a `Makefile` for common operations:
 Read `.claude/user.local.md` at the start of any task that needs an assignee, email, or project key.
 If the file does not exist, fall back to Claude memory (`user-config`), then placeholders.
 Run `make personalize` to generate it (if this repo uses Fleet Engineering tooling).
-
-## Fleet Engineering Skills
-
-Fetch and apply the relevant skill when the task matches its domain.
-
-| Skill | When to use |
-|---|---|
-| [start-work](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/sdlc/start-work/SKILL.md) | Create a Jira sub-task |
-| [finish-work](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/sdlc/finish-work/SKILL.md) | Commit, push, open PR, update Jira |
-| [jira-specialist](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/jira/jira-specialist/SKILL.md) | General Jira ticket management, triage, search, linking, transitions |
-| [task-specialist](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/jira/task-specialist/SKILL.md) | Internal technical task breakdown and planning |
-| [bug-specialist](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/jira/bug-specialist/SKILL.md) | Bug triage, reproduction steps, fix planning |
-| [story-specialist](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/jira/story-specialist/SKILL.md) | User story creation and acceptance criteria |
-| [pr-review](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/sdlc/pr-review/SKILL.md) | GitHub PR review with inline comments |
