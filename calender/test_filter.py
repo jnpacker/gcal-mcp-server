@@ -3,6 +3,7 @@
 
 from datetime import datetime, timedelta
 
+
 def parse_day_filter(day_str: str) -> tuple:
     """Parse day filter and return (time_filter, time_min, time_max)"""
     # Handle standard filters

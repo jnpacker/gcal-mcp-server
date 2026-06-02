@@ -7,15 +7,14 @@ Requirements:
     pip install mcp curses-menu
 """
 
-import curses
-import json
+import argparse
 import asyncio
+import curses
+import html
+import json
 import os
 import re
-import html
-from datetime import datetime, timedelta, timezone, date
-from typing import List, Dict, Optional
-import argparse
+from datetime import UTC, date, datetime, timedelta
 
 try:
     from mcp import ClientSession, StdioServerParameters
@@ -29,7 +28,7 @@ except ImportError:
 class CalendarEvent:
     """Represents a calendar event with overlap detection"""
 
-    def __init__(self, event_data: Dict, is_available: bool = False, core_start_hour: int = 9, core_end_hour: int = 17):
+    def __init__(self, event_data: dict, is_available: bool = False, core_start_hour: int = 9, core_end_hour: int = 17):
         self.is_available = is_available
         self.core_start_hour = core_start_hour
         self.core_end_hour = core_end_hour
@@ -128,7 +127,7 @@ class CalendarEvent:
 
         return f"{boxes} Available"
 
-    def _get_response_status(self, event_data: Dict) -> str:
+    def _get_response_status(self, event_data: dict) -> str:
         """Extract response status from event data"""
         # Check if user is an attendee and get their response
         attendees = event_data.get('attendees', [])
@@ -139,7 +138,7 @@ class CalendarEvent:
                 return status
         return event_data.get('responseStatus', 'needsAction')
 
-    def _parse_time(self, time_obj: Dict) -> Optional[datetime]:
+    def _parse_time(self, time_obj: dict) -> datetime | None:
         """Parse datetime from event time object"""
         # Check for dateTime field with non-empty value
         if 'dateTime' in time_obj and time_obj['dateTime']:
@@ -267,7 +266,7 @@ class MCPClient:
 
     def __init__(self, server_path: str):
         self.server_path = server_path
-        self.session: Optional[ClientSession] = None
+        self.session: ClientSession | None = None
         self.stdio_context = None
         self.session_context = None
 
@@ -302,7 +301,7 @@ class MCPClient:
             await self.stdio_context.__aexit__(None, None, None)
             self.stdio_context = None
 
-    async def call_tool(self, tool_name: str, arguments: Dict) -> Dict:
+    async def call_tool(self, tool_name: str, arguments: dict) -> dict:
         """Call an MCP tool and return the result"""
         if not self.session:
             raise RuntimeError("Not connected to MCP server")
@@ -319,7 +318,7 @@ class CalendarTUI:
         self.mcp_client = mcp_client
         self.timezone = timezone
         self.debug = debug
-        self.events: List[CalendarEvent] = []
+        self.events: list[CalendarEvent] = []
         self.current_row = 0
         self.scroll_offset = 0
         self.status_message = ""
@@ -629,7 +628,7 @@ class CalendarTUI:
                     self.loaded_dates.add(current_date)
                 current_date += timedelta(days=1)
 
-    def get_filtered_events(self) -> List[CalendarEvent]:
+    def get_filtered_events(self) -> list[CalendarEvent]:
         """Get events filtered by current display mode, view date, and declined status"""
         view_date = self.current_view_date
         day_start = view_date.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -901,7 +900,7 @@ class CalendarTUI:
 
         # Merge declined events with new_events and sort by start time
         timed_events_combined = new_events + declined_events
-        timed_events_combined.sort(key=lambda e: e.start_time if e.start_time else datetime.min.replace(tzinfo=timezone.utc))
+        timed_events_combined.sort(key=lambda e: e.start_time if e.start_time else datetime.min.replace(tzinfo=UTC))
 
         self.events = all_day_events + events_without_times + timed_events_combined
 
@@ -1571,7 +1570,7 @@ class CalendarTUI:
                         self.recommendations_text = f"❌ Error getting recommendations:\n{error_msg}"
                         self.debug_log(f"Claude /recommend failed: {error_msg}")
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Only update if we're still the current task
                 if hasattr(self, '_current_recommendations_task_id') and my_task_id == self._current_recommendations_task_id:
                     self.recommendations_text = "❌ Request timed out. Please try again."
@@ -2522,9 +2521,9 @@ class CalendarTUI:
                     if not event.start_time:
                         return False
                     # Convert to UTC for consistent comparison across timezones
-                    event_utc = event.start_time.astimezone(timezone.utc)
-                    range_start_utc = range_start.astimezone(timezone.utc)
-                    range_end_utc = range_end.astimezone(timezone.utc)
+                    event_utc = event.start_time.astimezone(UTC)
+                    range_start_utc = range_start.astimezone(UTC)
+                    range_end_utc = range_end.astimezone(UTC)
                     # Check if event starts within the reload range
                     return range_start_utc <= event_utc < range_end_utc
 

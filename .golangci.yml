@@ -1,0 +1,19 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gosimple
+    - stylecheck
+    - misspell
+
+issues:
+  exclude-rules:
+    # Allow fmt.Fprintf(os.Stderr, ...) — required pattern for MCP server logging
+    - linters: [forbidigo]
+      text: "fmt.Fprintf"
