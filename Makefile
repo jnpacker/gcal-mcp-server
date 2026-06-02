@@ -22,7 +22,7 @@ clean:
 
 ## Go tests
 test-go:
-	go test ./...
+	go test -cover ./internal/...
 
 ## Python TUI tests
 test-python:
