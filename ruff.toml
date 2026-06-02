@@ -1,0 +1,14 @@
+# Ruff configuration for gcal-mcp-server Python code
+target-version = "py312"
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long — TUI code has intentionally long format strings
+]

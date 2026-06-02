@@ -6,9 +6,9 @@ This tests the MCP client without requiring a curses terminal
 
 import asyncio
 import json
+import os
 import sys
 from datetime import datetime, timedelta
-import os
 
 # Add parent directory to path to import calendar_tui
 sys.path.insert(0, os.path.dirname(__file__))
@@ -405,7 +405,6 @@ async def test_column_alignment():
     title_padded = f"{title:<35}"
     rsvp = regular_event.get_response_char()
     attendees = regular_event.get_attendee_count()[:14]
-
     print(f"   Day column: '{day:<4}' (4 chars)")
     print(f"   Time column: '{time_str}' (23 chars)")
     print(f"   Event column: '{title_padded}' ({len(title_padded)} chars)")
@@ -436,7 +435,6 @@ async def test_column_alignment():
     title_padded_active = f"{title_active:<34}"
     rsvp_active = active_event.get_response_char()
     attendees_active = active_event.get_attendee_count()[:14]
-
     print(f"   Day column: '{day_active:<4}' (4 chars)")
     print(f"   Time column: '{time_str_active}' (23 chars)")
     print(f"   Event column: '{title_padded_active}' ({len(title_padded_active)} chars, 35 display width)")
