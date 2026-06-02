@@ -2,25 +2,16 @@
 
 This document provides context, patterns, and conventions for AI agents working in this repository.
 
-## 🏗️ Architecture & Organization
-
-This is a Model Context Protocol (MCP) server written in Go that integrates with Google Calendar and Google Drive APIs. 
-
-### Core Components
-* **`cmd/server/main.go`**: The entry point. Initializes services, registers tools, and starts the MCP server.
-* **`internal/mcp/`**: Implements the Model Context Protocol (JSON-RPC over stdin/stdout).
-* **`internal/calendar/`**: Contains the core logic for Google Calendar API interactions (`client.go`) and the MCP tool definitions (`tools.go`).
-* **`internal/auth/`**: Handles Google OAuth 2.0 authentication and token management.
-* **`scripts/`**: Contains scripts for syncing AI command prompts (`sync-commands.sh`, `sync_commands.py`).
-* **`calender/`**: (Note the spelling) Contains a Python-based Terminal UI for calendar management (`calendar_tui.py`) and its tests.
+For system architecture, data flows, and module layout, see [docs/architecture.md](docs/architecture.md).
 
 ## 🚀 Essential Commands
 
 The repository uses a `Makefile` for common operations:
 
 * **`make build`**: Compiles the Go binary to `./bin/gcal-mcp-server`.
-* **`make test`**: Runs the Go test suite (`go test ./...`). There are also Python tests in `calender/` that run via `pytest`.
-* **`make dev`**: Runs `fmt`, `vet`, `test`, and `build`.
+* **`make test`**: Runs both Go tests (`go test ./...`) and Python tests (`pytest`).
+* **`make dev`**: Runs `fmt`, `vet`, `lint`, `test`, and `build`.
+* **`make lint`**: Runs `go vet` + `staticcheck` (Go) and `ruff check` (Python). Auto-installs both tools if missing.
 * **`make auth`**: Removes the local `token.json` and runs the server to force a new Google OAuth flow.
 * **`make sync-commands`**: Runs the script to synchronize AI prompt files across `.claude`, `.gemini`, and `.cursor` directories.
 
@@ -36,8 +27,18 @@ The repository uses a `Makefile` for common operations:
 
 3. **AI Command Synchronization**
    * Instead of a single system prompt, this project provides tailored command instructions for different AI platforms (Claude, Gemini, Cursor).
-   * These commands live in platform-specific hidden directories (`.claude/commands/`, etc.). 
+   * These commands live in platform-specific hidden directories (`.claude/commands/`, etc.).
    * When modifying commands or prompts, update the source of truth and use `make sync-commands` to propagate changes across platforms.
 
 4. **Typo in Directory Name**
    * The Python component is located in `calender/`, not `calendar/`. Be careful with path autocomplete.
+
+5. **Unavailable CLIs**
+   * `gh` CLI is not installed. Use `mcp__github-*` MCP tools for all GitHub operations (PRs, issues, branches, code search).
+   * `jira` CLI is not installed. Use `mcp__jira-mcp-server__*` MCP tools for all Jira operations.
+
+## Personal Configuration
+
+Read `.claude/user.local.md` at the start of any task that needs an assignee, email, or project key.
+If the file does not exist, fall back to Claude memory (`user-config`), then placeholders.
+Run `make personalize` to generate it (if this repo uses Fleet Engineering tooling).
