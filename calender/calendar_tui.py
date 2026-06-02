@@ -444,11 +444,11 @@ class CalendarTUI:
         # Hide cursor
         curses.curs_set(0)
 
-    def debug_log(self, message: str):
+    def debug_log(self, message: str, *args):
         """Log debug message to stderr if debug mode is enabled"""
         if self.debug:
             import sys
-            print(f"[DEBUG] {message}", file=sys.stderr, flush=True)
+            print(f"[DEBUG] {message % args if args else message}", file=sys.stderr, flush=True)
 
     def start_loading(self, message: str):
         """Start loading animation with message"""
@@ -1676,16 +1676,13 @@ class CalendarTUI:
                         wrapped_lines.append(remaining)
                         break
 
-                    # Find the last space within max_width
+                    # Find the last space within max_width, skipping leading indent
+                    current_indent_len = len(remaining) - len(remaining.lstrip())
                     wrap_point = max_width
                     for i in range(max_width, 0, -1):
-                        if remaining[i-1] in (' ', '-', ','):
+                        if remaining[i-1] in (' ', '-', ',') and i > current_indent_len:
                             wrap_point = i
                             break
-
-                    # If no good break point found, just hard break
-                    if wrap_point == max_width and len(remaining) > max_width:
-                        wrap_point = max_width
 
                     # Add the wrapped portion
                     wrapped_lines.append(remaining[:wrap_point])
