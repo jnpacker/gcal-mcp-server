@@ -420,6 +420,15 @@ Use RRULE format for recurring events:
 - **Monthly**: `["RRULE:FREQ=MONTHLY;BYMONTHDAY=15"]`
 - **Yearly**: `["RRULE:FREQ=YEARLY;BYMONTH=12;BYMONTHDAY=25"]`
 
+## Developer Documentation
+
+Detailed developer guides are in [`./docs/`](docs/):
+
+- [**Architecture**](docs/architecture.md) — Go package layout, MCP protocol, Python TUI design, data flow
+- [**Development**](docs/development.md) — prerequisites, build commands, Makefile targets, adding tools
+- [**Testing**](docs/testing.md) — running Go and Python tests, design constraints, coverage
+- [**CI**](docs/ci.md) — GitHub Actions jobs, debugging CI failures locally
+
 ## Development
 
 ### Project Structure
