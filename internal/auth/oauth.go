@@ -263,7 +263,7 @@ func getTokenFromWeb(config *oauth2.Config) (*oauth2.Token, error) {
 
 		// Send success response to browser
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprintf(w, `
+		_, _ = fmt.Fprintf(w, `
 			<html>
 			<head><title>Authorization Successful</title></head>
 			<body>
@@ -368,7 +368,7 @@ func tokenFromFile(file string) (*oauth2.Token, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	tok := &oauth2.Token{}
 	err = json.NewDecoder(f).Decode(tok)
 	return tok, err
@@ -381,7 +381,7 @@ func saveTokenSafe(path string, token *oauth2.Token) error {
 	if err != nil {
 		return fmt.Errorf("unable to cache oauth token: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if err := json.NewEncoder(f).Encode(token); err != nil {
 		return fmt.Errorf("unable to encode oauth token: %v", err)
 	}

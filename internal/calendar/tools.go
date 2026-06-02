@@ -797,13 +797,13 @@ func (ct *CalendarTools) handleSearchAttendees(arguments map[string]interface{})
 	}
 
 	var result strings.Builder
-	result.WriteString(fmt.Sprintf("🔍 Attendee search results for '%s':\n\n", query))
+	fmt.Fprintf(&result, "🔍 Attendee search results for '%s':\n\n", query)
 
 	if len(attendees) == 0 {
 		result.WriteString("No attendees found. Please provide full email addresses.")
 	} else {
 		for i, email := range attendees {
-			result.WriteString(fmt.Sprintf("%d. %s\n", i+1, email))
+			fmt.Fprintf(&result, "%d. %s\n", i+1, email)
 		}
 	}
 
@@ -1156,9 +1156,9 @@ func (ct *CalendarTools) formatEventResult(event interface{}) string {
 
 func (ct *CalendarTools) formatFreeBusyResult(response interface{}, attendees []string, timeMin, timeMax time.Time) string {
 	var result strings.Builder
-	result.WriteString(fmt.Sprintf("📅 Free/Busy information from %s to %s:\n\n",
+	fmt.Fprintf(&result, "📅 Free/Busy information from %s to %s:\n\n",
 		timeMin.Format("2006-01-02 15:04:05 MST"),
-		timeMax.Format("2006-01-02 15:04:05 MST")))
+		timeMax.Format("2006-01-02 15:04:05 MST"))
 
 	responseJSON, _ := json.MarshalIndent(response, "", "  ")
 	result.WriteString(string(responseJSON))
@@ -1491,9 +1491,9 @@ func (ct *CalendarTools) formatEventsResult(events *calendar.Events, params List
 	case "next_week":
 		result.WriteString("📅 Events for Next Week (Monday-Friday):\n\n")
 	case "custom":
-		result.WriteString(fmt.Sprintf("📅 Events from %s to %s:\n\n",
+		fmt.Fprintf(&result, "📅 Events from %s to %s:\n\n",
 			params.TimeMin.Format("2006-01-02 15:04"),
-			params.TimeMax.Format("2006-01-02 15:04")))
+			params.TimeMax.Format("2006-01-02 15:04"))
 	default:
 		result.WriteString("📅 Calendar Events:\n\n")
 	}
@@ -1553,9 +1553,9 @@ func (ct *CalendarTools) formatEventsResult(events *calendar.Events, params List
 
 		// Format date header
 		if parsedDate, err := time.Parse("2006-01-02", date); err == nil {
-			result.WriteString(fmt.Sprintf("## %s\n", parsedDate.Format("Monday, January 2, 2006")))
+			fmt.Fprintf(&result, "## %s\n", parsedDate.Format("Monday, January 2, 2006"))
 		} else {
-			result.WriteString(fmt.Sprintf("## %s\n", date))
+			fmt.Fprintf(&result, "## %s\n", date)
 		}
 
 		for _, event := range eventsByDate[date] {
@@ -1567,7 +1567,7 @@ func (ct *CalendarTools) formatEventsResult(events *calendar.Events, params List
 		}
 	}
 
-	result.WriteString(fmt.Sprintf("\n📊 Total: %d events", len(events.Items)))
+	fmt.Fprintf(&result, "\n📊 Total: %d events", len(events.Items))
 
 	return result.String()
 }
@@ -1578,7 +1578,7 @@ func (ct *CalendarTools) formatSingleEvent(result *strings.Builder, event *calen
 	if title == "" {
 		title = "(No Title)"
 	}
-	result.WriteString(fmt.Sprintf("### %s\n", title))
+	fmt.Fprintf(result, "### %s\n", title)
 
 	// Time information
 	if event.Start.Date != "" {
@@ -1592,24 +1592,24 @@ func (ct *CalendarTools) formatSingleEvent(result *strings.Builder, event *calen
 			if endErr == nil {
 				// Same day event
 				if startTime.Format("2006-01-02") == endTime.Format("2006-01-02") {
-					result.WriteString(fmt.Sprintf("🕐 **%s - %s**\n",
+					fmt.Fprintf(result, "🕐 **%s - %s**\n",
 						startTime.Format("3:04 PM"),
-						endTime.Format("3:04 PM")))
+						endTime.Format("3:04 PM"))
 				} else {
 					// Multi-day event
-					result.WriteString(fmt.Sprintf("🕐 **%s - %s**\n",
+					fmt.Fprintf(result, "🕐 **%s - %s**\n",
 						startTime.Format("Jan 2, 3:04 PM"),
-						endTime.Format("Jan 2, 3:04 PM")))
+						endTime.Format("Jan 2, 3:04 PM"))
 				}
 			} else {
-				result.WriteString(fmt.Sprintf("🕐 **%s**\n", startTime.Format("3:04 PM")))
+				fmt.Fprintf(result, "🕐 **%s**\n", startTime.Format("3:04 PM"))
 			}
 		}
 	}
 
 	// Location
 	if event.Location != "" {
-		result.WriteString(fmt.Sprintf("📍 **Location:** %s\n", event.Location))
+		fmt.Fprintf(result, "📍 **Location:** %s\n", event.Location)
 	}
 
 	// Attendees
@@ -1649,14 +1649,14 @@ func (ct *CalendarTools) formatSingleEvent(result *strings.Builder, event *calen
 		if len(description) > 200 {
 			description = description[:200] + "..."
 		}
-		result.WriteString(fmt.Sprintf("📝 **Description:** %s\n", description))
+		fmt.Fprintf(result, "📝 **Description:** %s\n", description)
 	}
 
 	// Conference/meeting link
 	if event.ConferenceData != nil && len(event.ConferenceData.EntryPoints) > 0 {
 		for _, entry := range event.ConferenceData.EntryPoints {
 			if entry.EntryPointType == "video" {
-				result.WriteString(fmt.Sprintf("🔗 **Meeting Link:** %s\n", entry.Uri))
+				fmt.Fprintf(result, "🔗 **Meeting Link:** %s\n", entry.Uri)
 				break
 			}
 		}
@@ -1669,7 +1669,7 @@ func (ct *CalendarTools) formatSingleEvent(result *strings.Builder, event *calen
 			if title == "" {
 				title = "Attachment"
 			}
-			result.WriteString(fmt.Sprintf("📎 **%s:** %s\n", title, att.FileUrl))
+			fmt.Fprintf(result, "📎 **%s:** %s\n", title, att.FileUrl)
 		}
 	}
 
@@ -1685,63 +1685,63 @@ func (ct *CalendarTools) formatSingleEvent(result *strings.Builder, event *calen
 			default:
 				typeIcon = "📋"
 			}
-			result.WriteString(fmt.Sprintf("%s **Event Type:** %s\n", typeIcon, eventType))
+			fmt.Fprintf(result, "%s **Event Type:** %s\n", typeIcon, eventType)
 		}
 
 		// Working location information from extended properties
 		if workingType, typeExists := event.ExtendedProperties.Private["workingLocationType"]; typeExists && workingType != "" {
 			if workingLabel, labelExists := event.ExtendedProperties.Private["workingLocationLabel"]; labelExists && workingLabel != "" {
-				result.WriteString(fmt.Sprintf("🏢 **Working Location:** %s (%s)\n", workingLabel, workingType))
+				fmt.Fprintf(result, "🏢 **Working Location:** %s (%s)\n", workingLabel, workingType)
 			} else {
-				result.WriteString(fmt.Sprintf("🏢 **Working Location Type:** %s\n", workingType))
+				fmt.Fprintf(result, "🏢 **Working Location Type:** %s\n", workingType)
 			}
 		}
 
 		// Focus time properties information from extended properties
 		if autoDeclineMode, exists := event.ExtendedProperties.Private["focusTimeAutoDeclineMode"]; exists && autoDeclineMode != "" {
-			result.WriteString(fmt.Sprintf("🛡️ **Auto-decline Mode:** %s\n", autoDeclineMode))
+			fmt.Fprintf(result, "🛡️ **Auto-decline Mode:** %s\n", autoDeclineMode)
 		}
 		if chatStatus, exists := event.ExtendedProperties.Private["focusTimeChatStatus"]; exists && chatStatus != "" {
 			statusIcon := "💬"
 			if chatStatus == "doNotDisturb" {
 				statusIcon = "🔕"
 			}
-			result.WriteString(fmt.Sprintf("%s **Chat Status:** %s\n", statusIcon, chatStatus))
+			fmt.Fprintf(result, "%s **Chat Status:** %s\n", statusIcon, chatStatus)
 		}
 		if declineMessage, exists := event.ExtendedProperties.Private["focusTimeDeclineMessage"]; exists && declineMessage != "" {
-			result.WriteString(fmt.Sprintf("📝 **Decline Message:** %s\n", declineMessage))
+			fmt.Fprintf(result, "📝 **Decline Message:** %s\n", declineMessage)
 		}
 	}
 
 	// Also check focus time properties from Google Calendar API fields
 	if event.FocusTimeProperties != nil {
 		if event.FocusTimeProperties.AutoDeclineMode != "" {
-			result.WriteString(fmt.Sprintf("🛡️ **Auto-decline Mode:** %s\n", event.FocusTimeProperties.AutoDeclineMode))
+			fmt.Fprintf(result, "🛡️ **Auto-decline Mode:** %s\n", event.FocusTimeProperties.AutoDeclineMode)
 		}
 		if event.FocusTimeProperties.ChatStatus != "" {
 			statusIcon := "💬"
 			if event.FocusTimeProperties.ChatStatus == "doNotDisturb" {
 				statusIcon = "🔕"
 			}
-			result.WriteString(fmt.Sprintf("%s **Chat Status:** %s\n", statusIcon, event.FocusTimeProperties.ChatStatus))
+			fmt.Fprintf(result, "%s **Chat Status:** %s\n", statusIcon, event.FocusTimeProperties.ChatStatus)
 		}
 		if event.FocusTimeProperties.DeclineMessage != "" {
-			result.WriteString(fmt.Sprintf("📝 **Decline Message:** %s\n", event.FocusTimeProperties.DeclineMessage))
+			fmt.Fprintf(result, "📝 **Decline Message:** %s\n", event.FocusTimeProperties.DeclineMessage)
 		}
 	}
 
 	// Color information - always show to debug what's being returned
-	result.WriteString(fmt.Sprintf("🎨 **Color ID:** '%s' (length: %d)\n", event.ColorId, len(event.ColorId)))
+	fmt.Fprintf(result, "🎨 **Color ID:** '%s' (length: %d)\n", event.ColorId, len(event.ColorId))
 
 	// Event ID for reference
-	result.WriteString(fmt.Sprintf("🆔 **Event ID:** %s\n", event.Id))
+	fmt.Fprintf(result, "🆔 **Event ID:** %s\n", event.Id)
 
 	// Overlap status
 	overlapIcon := "✅"
 	if hasOverlap {
 		overlapIcon = "⚠️"
 	}
-	result.WriteString(fmt.Sprintf("%s **Has Overlap:** %t\n", overlapIcon, hasOverlap))
+	fmt.Fprintf(result, "%s **Has Overlap:** %t\n", overlapIcon, hasOverlap)
 
 	result.WriteString("\n")
 }
