@@ -216,13 +216,12 @@ func getClient(config *oauth2.Config, tokenPath string) (*http.Client, error) {
 
 // isTokenValid checks if the token is valid with a buffer time before expiry
 func isTokenValid(tok *oauth2.Token) bool {
-	if tok == nil {
+	if tok == nil || tok.AccessToken == "" {
 		return false
 	}
-	// Check if token has an expiry time set
+	// No expiry set — assume valid (some tokens don't expire)
 	if tok.Expiry.IsZero() {
-		// No expiry set - assume valid (some tokens don't expire)
-		return tok.AccessToken != ""
+		return true
 	}
 	// Check if token will expire within the buffer time
 	return time.Now().Add(tokenExpiryBuffer).Before(tok.Expiry)
