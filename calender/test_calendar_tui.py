@@ -6,10 +6,9 @@ This tests the MCP client without requiring a curses terminal
 
 import asyncio
 import json
-import sys
-from datetime import datetime, timedelta
 import os
 import sys
+from datetime import datetime, timedelta
 
 # Add parent directory to path to import calendar_tui
 sys.path.insert(0, os.path.dirname(__file__))
@@ -406,8 +405,6 @@ async def test_column_alignment():
     title_padded = f"{title:<35}"
     rsvp = regular_event.get_response_char()
     attendees = regular_event.get_attendee_count()[:14]
-    row_text = f"{day:<4} {time_str} {title_padded} {rsvp} {attendees:<14}"
-
     print(f"   Day column: '{day:<4}' (4 chars)")
     print(f"   Time column: '{time_str}' (23 chars)")
     print(f"   Event column: '{title_padded}' ({len(title_padded)} chars)")
@@ -438,8 +435,6 @@ async def test_column_alignment():
     title_padded_active = f"{title_active:<34}"
     rsvp_active = active_event.get_response_char()
     attendees_active = active_event.get_attendee_count()[:14]
-    row_text_active = f"{day_active:<4} {time_str_active} {title_padded_active} {rsvp_active} {attendees_active:<14}"
-
     print(f"   Day column: '{day_active:<4}' (4 chars)")
     print(f"   Time column: '{time_str_active}' (23 chars)")
     print(f"   Event column: '{title_padded_active}' ({len(title_padded_active)} chars, 35 display width)")
@@ -462,7 +457,7 @@ async def test_column_alignment():
     pos_event = pos_time + 23 + 1  # Time(23) + space(1)
     pos_rsvp = pos_event + 34 + 1  # Event(34) + space(1) - using 34 because that's the padded length
 
-    print(f"\n3. Verifying column positions are consistent:")
+    print("\n3. Verifying column positions are consistent:")
     print(f"   Day column starts at: {pos_day}")
     print(f"   Time column starts at: {pos_time}")
     print(f"   Event column starts at: {pos_event}")
@@ -475,8 +470,6 @@ async def test_column_alignment():
 
 async def test_cursor_positioning():
     """Test that cursor positions correctly at current event on initial load"""
-    from calendar_tui import CalendarTUI, MCPClient
-    import unittest.mock as mock
 
     print("\n" + "="*60)
     print("Testing Cursor Positioning")
@@ -790,7 +783,7 @@ async def test_available_time_slots():
     }, is_available=True, core_start_hour=9, core_end_hour=17)
 
     print(f"   Slot: {evening_start.strftime('%I:%M %p')} - {evening_end.strftime('%I:%M %p')}")
-    print(f"   Duration: 1.5 hours = 3 blocks")
+    print("   Duration: 1.5 hours = 3 blocks")
     print(f"   Summary: {available_evening.summary}")
 
     assert "⬛" in available_evening.summary, "Should contain grey boxes"
@@ -811,7 +804,7 @@ async def test_available_time_slots():
     }, is_available=True, core_start_hour=9, core_end_hour=17)
 
     print(f"   Slot: {long_start.strftime('%I:%M %p')} - {long_end.strftime('%I:%M %p')}")
-    print(f"   Duration: 8 hours = 16 blocks (but capped at 10)")
+    print("   Duration: 8 hours = 16 blocks (but capped at 10)")
     print(f"   Summary: {available_long.summary}")
 
     assert available_long.summary.count("🟩") == 10, "Should cap at 10 boxes"
@@ -917,8 +910,6 @@ async def test_available_time_slots():
 
 async def test_time_period_navigation():
     """Test time period navigation (left/right arrow functionality)"""
-    from calendar_tui import CalendarTUI, MCPClient
-    import unittest.mock as mock
 
     print("\n" + "="*60)
     print("Testing Time Period Navigation")
@@ -1237,7 +1228,7 @@ async def test_focus_time_creation():
     duration_minutes = 40
     title = "Paperwork - Focus time" if duration_minutes <= 40 else "Development - Focus time"
     assert title == "Paperwork - Focus time", "Exactly 40 minutes should use 'Paperwork - Focus time'"
-    print(f"   ✓ 40 minutes (boundary) → 'Paperwork - Focus time'")
+    print("   ✓ 40 minutes (boundary) → 'Paperwork - Focus time'")
 
     # Test 9: Edge case - 41 minutes (just over boundary)
     print("\n9. Testing boundary case - 41 minutes:")
@@ -1245,7 +1236,7 @@ async def test_focus_time_creation():
     duration_minutes = 41
     title = "Paperwork - Focus time" if duration_minutes <= 40 else "Development - Focus time"
     assert title == "Development - Focus time", "41 minutes should use 'Development - Focus time'"
-    print(f"   ✓ 41 minutes (just over) → 'Development - Focus time'")
+    print("   ✓ 41 minutes (just over) → 'Development - Focus time'")
 
     print("\n✓ Focus time creation logic validated!")
     return True
@@ -1260,7 +1251,6 @@ async def test_delete_focus_time():
     print("="*60)
 
     now = datetime.now().astimezone()
-    today = now.date()
 
     # Test 1: Verify focus time event has an id
     print("\n1. Testing that focus time events have IDs:")
@@ -1318,7 +1308,6 @@ async def test_delete_focus_time():
 
 async def test_bulk_focus_time_gaps():
     """Test bulk focus time creation including start/end of day gaps"""
-    from calendar_tui import CalendarEvent
 
     print("\n" + "="*60)
     print("Testing Bulk Focus Time Gap Detection")

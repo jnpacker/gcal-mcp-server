@@ -7,16 +7,14 @@ Requirements:
     pip install mcp curses-menu
 """
 
-import curses
-import json
+import argparse
 import asyncio
+import curses
+import html
+import json
 import os
 import re
-import html
-import subprocess
-from datetime import datetime, timedelta, timezone, date
-from typing import List, Dict, Optional
-import argparse
+from datetime import UTC, date, datetime, timedelta
 
 try:
     from mcp import ClientSession, StdioServerParameters
@@ -30,7 +28,7 @@ except ImportError:
 class CalendarEvent:
     """Represents a calendar event with overlap detection"""
 
-    def __init__(self, event_data: Dict, is_available: bool = False, core_start_hour: int = 9, core_end_hour: int = 17):
+    def __init__(self, event_data: dict, is_available: bool = False, core_start_hour: int = 9, core_end_hour: int = 17):
         self.is_available = is_available
         self.core_start_hour = core_start_hour
         self.core_end_hour = core_end_hour
@@ -129,7 +127,7 @@ class CalendarEvent:
 
         return f"{boxes} Available"
 
-    def _get_response_status(self, event_data: Dict) -> str:
+    def _get_response_status(self, event_data: dict) -> str:
         """Extract response status from event data"""
         # Check if user is an attendee and get their response
         attendees = event_data.get('attendees', [])
@@ -140,7 +138,7 @@ class CalendarEvent:
                 return status
         return event_data.get('responseStatus', 'needsAction')
 
-    def _parse_time(self, time_obj: Dict) -> Optional[datetime]:
+    def _parse_time(self, time_obj: dict) -> datetime | None:
         """Parse datetime from event time object"""
         # Check for dateTime field with non-empty value
         if 'dateTime' in time_obj and time_obj['dateTime']:
@@ -268,7 +266,7 @@ class MCPClient:
 
     def __init__(self, server_path: str):
         self.server_path = server_path
-        self.session: Optional[ClientSession] = None
+        self.session: ClientSession | None = None
         self.stdio_context = None
         self.session_context = None
 
@@ -303,7 +301,7 @@ class MCPClient:
             await self.stdio_context.__aexit__(None, None, None)
             self.stdio_context = None
 
-    async def call_tool(self, tool_name: str, arguments: Dict) -> Dict:
+    async def call_tool(self, tool_name: str, arguments: dict) -> dict:
         """Call an MCP tool and return the result"""
         if not self.session:
             raise RuntimeError("Not connected to MCP server")
@@ -320,7 +318,7 @@ class CalendarTUI:
         self.mcp_client = mcp_client
         self.timezone = timezone
         self.debug = debug
-        self.events: List[CalendarEvent] = []
+        self.events: list[CalendarEvent] = []
         self.current_row = 0
         self.scroll_offset = 0
         self.status_message = ""
@@ -383,7 +381,7 @@ class CalendarTUI:
                 # Define color 8 as dark red (RGB values scaled to 0-1000)
                 curses.init_color(8, 545, 0, 0)  # Dark red
                 conflict_color = 8
-            except:
+            except Exception:
                 # Fall back to regular red if custom colors don't work
                 conflict_color = curses.COLOR_RED
         else:
@@ -397,7 +395,7 @@ class CalendarTUI:
                 # Using color 15 to avoid conflicts with standard 0-7 colors
                 curses.init_color(15, 600, 600, 600)  # Light grey RGB: (153, 153, 153)
                 light_grey_color = 15
-            except:
+            except Exception:
                 # Fall back to white if custom colors don't work
                 light_grey_color = curses.COLOR_WHITE
         else:
@@ -410,7 +408,7 @@ class CalendarTUI:
                 # Define color 16 as orange (RGB values scaled to 0-1000)
                 curses.init_color(16, 1000, 647, 0)  # Orange RGB: (255, 165, 0)
                 orange_color = 16
-            except:
+            except Exception:
                 # Fall back to yellow if custom colors don't work
                 orange_color = curses.COLOR_YELLOW
         else:
@@ -630,7 +628,7 @@ class CalendarTUI:
                     self.loaded_dates.add(current_date)
                 current_date += timedelta(days=1)
 
-    def get_filtered_events(self) -> List[CalendarEvent]:
+    def get_filtered_events(self) -> list[CalendarEvent]:
         """Get events filtered by current display mode, view date, and declined status"""
         view_date = self.current_view_date
         day_start = view_date.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -902,7 +900,7 @@ class CalendarTUI:
 
         # Merge declined events with new_events and sort by start time
         timed_events_combined = new_events + declined_events
-        timed_events_combined.sort(key=lambda e: e.start_time if e.start_time else datetime.min.replace(tzinfo=timezone.utc))
+        timed_events_combined.sort(key=lambda e: e.start_time if e.start_time else datetime.min.replace(tzinfo=UTC))
 
         self.events = all_day_events + events_without_times + timed_events_combined
 
@@ -1201,7 +1199,7 @@ class CalendarTUI:
                 # Draw dash
                 self.stdscr.addstr(y, link_x, link_display, attr)
 
-        except curses.error as e:
+        except curses.error:
             # Handle edge case where text doesn't fit - try to write as much as possible
             # Curses error usually means we exceeded terminal width
             pass
@@ -1294,7 +1292,7 @@ class CalendarTUI:
             self.stdscr.addstr(start_y, start_x, "╔" + "═" * (modal_width - 2) + "╗", curses.color_pair(1) | curses.A_BOLD)
 
             # Title bar
-            title = f" Event Details "
+            title = " Event Details "
             title_x = start_x + (modal_width - len(title)) // 2
             self.stdscr.addstr(start_y, title_x, title, curses.color_pair(1) | curses.A_BOLD)
 
@@ -1572,7 +1570,7 @@ class CalendarTUI:
                         self.recommendations_text = f"❌ Error getting recommendations:\n{error_msg}"
                         self.debug_log(f"Claude /recommend failed: {error_msg}")
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Only update if we're still the current task
                 if hasattr(self, '_current_recommendations_task_id') and my_task_id == self._current_recommendations_task_id:
                     self.recommendations_text = "❌ Request timed out. Please try again."
@@ -1581,7 +1579,7 @@ class CalendarTUI:
                 try:
                     process.kill()
                     await process.wait()
-                except:
+                except Exception:
                     pass
 
         except FileNotFoundError:
@@ -1913,7 +1911,7 @@ class CalendarTUI:
         # Force immediate screen update to show the loading message
         try:
             self.draw()
-        except:
+        except Exception:
             pass  # Ignore any drawing errors during update
 
     def clear_loading_status(self, message: str = ""):
@@ -2004,7 +2002,7 @@ class CalendarTUI:
             result = await self.mcp_client.call_tool("delete_event", params)
 
             if isinstance(result, str) and ("Error:" in result or "error" in result.lower()):
-                self.status_message = f"❌ Delete failed, reloading"
+                self.status_message = "❌ Delete failed, reloading"
                 self.debug_log(f"Delete error: {result}")
                 await self._reload_event_day(event_date)
             else:
@@ -2012,7 +2010,7 @@ class CalendarTUI:
                 # Reload to sync server state and recalculate available slots
                 await self._reload_event_day(event_date)
         except Exception as e:
-            self.status_message = f"❌ Delete failed, reloading"
+            self.status_message = "❌ Delete failed, reloading"
             self.debug_log(f"Delete exception: {e}")
             await self._reload_event_day(event_date)
 
@@ -2100,7 +2098,6 @@ class CalendarTUI:
             self.draw()
             return
 
-        label = ''
         new_type = 'homeOffice' if choice == 0 else 'officeLocation'
 
         # Capture event info before modifying
@@ -2295,7 +2292,7 @@ class CalendarTUI:
             )
 
             if isinstance(result, str) and ("Error:" in result or "error" in result.lower()):
-                self.status_message = f"❌ RSVP update failed, reloading"
+                self.status_message = "❌ RSVP update failed, reloading"
                 self.debug_log(f"RSVP error: {result}")
                 await self._reload_event_day(event_date)
             else:
@@ -2304,7 +2301,7 @@ class CalendarTUI:
                 await self._reload_event_day(event_date)
 
         except Exception as e:
-            self.status_message = f"❌ RSVP update failed, reloading"
+            self.status_message = "❌ RSVP update failed, reloading"
             self.debug_log(f"RSVP exception: {e}")
             await self._reload_event_day(event_date)
 
@@ -2389,7 +2386,7 @@ class CalendarTUI:
 
         # Set status message
         self.status_message = f"✅ Creating {int(duration_minutes)}min {title}..."
-        self.debug_log(f"Optimistic: Added temp focus time event, removed available slot")
+        self.debug_log("Optimistic: Added temp focus time event, removed available slot")
 
     async def _create_single_focus_time_background(self, available_slot, event_date):
         """Background task to create focus time on server"""
@@ -2424,13 +2421,13 @@ class CalendarTUI:
                 "send_notifications": False
             }
 
-            self.debug_log(f"Background: Creating focus time via API...")
+            self.debug_log("Background: Creating focus time via API...")
             result = await self.mcp_client.call_tool("create_event", args)
 
             # Check if result contains an error
             if isinstance(result, str) and ("Error:" in result or "error" in result.lower()):
                 self.debug_log(f"Background: API error: {result}")
-                self.status_message = f"❌ Focus time creation failed, reloading"
+                self.status_message = "❌ Focus time creation failed, reloading"
                 await self._reload_event_day(event_date)
             else:
                 self.debug_log("Background: Focus time created successfully, reloading to get real event ID")
@@ -2440,7 +2437,7 @@ class CalendarTUI:
 
         except Exception as e:
             self.debug_log(f"Background: Exception creating focus time: {e}")
-            self.status_message = f"❌ Focus time creation failed, reloading"
+            self.status_message = "❌ Focus time creation failed, reloading"
             await self._reload_event_day(event_date)
 
     def navigate_to_weekday(self, direction: int):
@@ -2524,9 +2521,9 @@ class CalendarTUI:
                     if not event.start_time:
                         return False
                     # Convert to UTC for consistent comparison across timezones
-                    event_utc = event.start_time.astimezone(timezone.utc)
-                    range_start_utc = range_start.astimezone(timezone.utc)
-                    range_end_utc = range_end.astimezone(timezone.utc)
+                    event_utc = event.start_time.astimezone(UTC)
+                    range_start_utc = range_start.astimezone(UTC)
+                    range_end_utc = range_end.astimezone(UTC)
                     # Check if event starts within the reload range
                     return range_start_utc <= event_utc < range_end_utc
 
@@ -2609,8 +2606,6 @@ class CalendarTUI:
             direction: -1 for previous week, 1 for next week
         """
         try:
-            now = datetime.now().astimezone()
-
             if direction < 0:
                 # Fetch previous week
                 if self.time_min:
@@ -2714,8 +2709,6 @@ class CalendarTUI:
             # If we're early in the week (Mon-Tue), load whole week is simpler/faster
             # If we're later (Wed-Sun), load remaining days
 
-            days_remaining = 6 - now.weekday()  # Days left in week (0 = Sunday is last day)
-
             # Always load the full current week to ensure we have past days
             self.set_loading_status("📥 Loading current week...")
             self.debug_log("Fetching current week (full week)")
@@ -2814,7 +2807,7 @@ class CalendarTUI:
             # Check for key input (non-blocking)
             try:
                 key = self.stdscr.getch()
-            except:
+            except Exception:
                 key = -1
 
             # Small delay to prevent busy-waiting
@@ -3121,16 +3114,16 @@ class CalendarTUI:
                     # Debug: Dump in-memory events when showing declined
                     import sys
                     declined_events = [e for e in self.events if e.response_status == 'declined']
-                    print(f"\n[DEBUG] === Toggled to SHOW declined events ===", file=sys.stderr, flush=True)
+                    print("\n[DEBUG] === Toggled to SHOW declined events ===", file=sys.stderr, flush=True)
                     print(f"[DEBUG] Total events in memory: {len(self.events)}", file=sys.stderr, flush=True)
                     print(f"[DEBUG] Declined events in memory: {len(declined_events)}", file=sys.stderr, flush=True)
                     if declined_events:
-                        print(f"[DEBUG] Declined events:", file=sys.stderr, flush=True)
+                        print("[DEBUG] Declined events:", file=sys.stderr, flush=True)
                         for e in declined_events:
                             start_str = e.start_time.strftime('%Y-%m-%d %H:%M') if e.start_time else 'N/A'
                             print(f"[DEBUG]   - {start_str} | {e.summary} | id={e.id}", file=sys.stderr, flush=True)
                     else:
-                        print(f"[DEBUG] No declined events found in memory!", file=sys.stderr, flush=True)
+                        print("[DEBUG] No declined events found in memory!", file=sys.stderr, flush=True)
                 else:
                     self.status_message = "🙈 Hiding declined events"
 
@@ -3213,7 +3206,7 @@ def get_system_timezone():
             return local_tz.zone
         elif hasattr(local_tz, 'key'):
             return local_tz.key
-    except:
+    except Exception:
         pass
 
     # Fallback to UTC if we can't detect
