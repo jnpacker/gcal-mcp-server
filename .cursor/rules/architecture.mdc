@@ -1,0 +1,6 @@
+---
+description: System architecture, data flows, and module layout for gcal-mcp-server
+alwaysApply: false
+---
+
+@docs/architecture.md
