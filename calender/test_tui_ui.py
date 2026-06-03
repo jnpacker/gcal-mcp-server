@@ -433,7 +433,7 @@ class TestEdgeCases:
         async def run():
             await tui.delete_event()
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
         assert "No event" in tui.status_message or tui.status_message != ""
 
     def test_recommendations_invalid_when_no_time_range(self):
@@ -503,4 +503,4 @@ class TestMCPClient:
         async def run():
             await client.disconnect()
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
