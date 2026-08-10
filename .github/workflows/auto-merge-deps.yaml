@@ -13,6 +13,9 @@ on:
 jobs:
   auto-merge:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -20,17 +23,20 @@ jobs:
       - name: Get eligible dependency PRs
         id: get_prs
         run: |
-          # Only PRs authored by the trusted jnpacker PAT identity, on a
-          # dependency-update branch (created by the swarm-deps-agent bot),
-          # are eligible for auto-merge. Also require the PR to be mergeable
-          # and all non-tide checks to have passed.
-          prs=$(gh pr list --state open --json number,title,url,author,headRefName,statusCheckRollup,mergeable --jq '
+          # Only PRs authored by the trusted jnpacker PAT identity, targeting
+          # main, on a dependency-update branch (created by the
+          # swarm-deps-agent bot), are eligible for auto-merge. Also require
+          # the PR to be mergeable and every non-tide check to have
+          # completed successfully (not just "at least one success" - a
+          # pending check must not count as passing).
+          prs=$(gh pr list --state open --base main --json number,title,url,author,headRefName,headRefOid,statusCheckRollup,mergeable --jq '
             .[] | select(
               (.author.login == "jnpacker") and
               (.headRefName | test("^(fix|build)/(go|python)-deps-")) and
               (.mergeable == "MERGEABLE") and
-              ([.statusCheckRollup[] | select(.context != "tide" and .name != "tide" and (.state == "FAILURE" or .conclusion == "FAILURE"))] | length == 0) and
-              ([.statusCheckRollup[] | select(.context != "tide" and .name != "tide" and (.state == "SUCCESS" or .conclusion == "SUCCESS"))] | length > 0)
+              ([.statusCheckRollup[] | select(.context != "tide" and .name != "tide")] as $checks |
+                ($checks | length > 0) and
+                ($checks | all(.state == "SUCCESS" or .conclusion == "SUCCESS")))
             )')
 
           if [ -z "$prs" ]; then
@@ -49,7 +55,11 @@ jobs:
       - name: Auto-merge ready PRs
         if: steps.get_prs.outputs.ready_prs != '[]'
         run: |
-          ready_prs='${{ steps.get_prs.outputs.ready_prs }}'
+          # Read the PR list from an environment variable rather than
+          # interpolating it directly into the script, since it contains
+          # contributor-controlled PR titles that could otherwise break out
+          # of the quoted assignment and inject shell commands.
+          ready_prs="$READY_PRS"
 
           echo "Processing PRs for auto-merge..."
           echo "$ready_prs" | jq -r '.[] | .number' | while read -r pr_number; do
@@ -58,11 +68,14 @@ jobs:
             pr_info=$(echo "$ready_prs" | jq -r ".[] | select(.number == $pr_number)")
             pr_title=$(echo "$pr_info" | jq -r '.title')
             pr_branch=$(echo "$pr_info" | jq -r '.headRefName')
+            pr_head_oid=$(echo "$pr_info" | jq -r '.headRefOid')
 
             echo "Attempting to merge PR #$pr_number: $pr_title (branch: $pr_branch)"
 
-            # Attempt to merge the PR
-            if gh pr merge "$pr_number" --squash --delete-branch; then
+            # --match-head-commit binds the merge to the exact commit that
+            # was evaluated for eligibility, so a push landing between the
+            # eligibility check and this merge cannot slip in unreviewed.
+            if gh pr merge "$pr_number" --squash --delete-branch --match-head-commit "$pr_head_oid"; then
               echo "Successfully merged PR #$pr_number"
 
               gh pr comment "$pr_number" --body "This PR was automatically merged because all checks passed and it matched the trusted dependency update pattern (author: jnpacker, branch: $pr_branch)."
@@ -76,6 +89,7 @@ jobs:
           done
         env:
           GH_TOKEN: ${{ github.token }}
+          READY_PRS: ${{ steps.get_prs.outputs.ready_prs }}
 
       - name: Summary
         run: |
