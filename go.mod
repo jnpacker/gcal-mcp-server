@@ -2,7 +2,7 @@ module gcal-mcp-server
 
 go 1.26.3
 
-toolchain go1.26.10
+toolchain go1.27.3
 
 require (
 	golang.org/x/oauth2 v0.37.0
